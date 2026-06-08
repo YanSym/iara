@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.eggs/
+*.egg
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Local runtime data
+.adk/
+*.db
+*.sqlite
+*.sqlite3
+
+# Terraform
+# Ignorar: estado (contém outputs sensíveis), cache de providers, planos binários
+# NÃO ignorar: terraform.tfvars (só config, sem segredos) e .terraform.lock.hcl (pina versão dos providers)
+infra/terraform/*.auto.tfvars
+infra/terraform/*.auto.tfvars.json
+infra/terraform/.terraform/
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/*.tfstate.*
+infra/terraform/*.tfplan
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

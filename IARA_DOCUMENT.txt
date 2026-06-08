@@ -1,0 +1,591 @@
+IAra Multi-tenant — Handoff técnico para implementação terceirizada
+Campo
+Valor
+Versão
+1.0
+Data
+03/06/2026
+Responsável
+Breno Cocheto
+Status
+especificação de contratação e implementação
+
+
+
+
+
+Sumário
+1. Sumário executivo
+2. Princípios obrigatórios
+3. Escopo contratado
+4. Não-escopo
+5. Arquitetura-alvo em alto nível
+6. Componentes mínimos a implementar
+7. Modelo de dados mínimo
+8. Segurança, LGPD e redaction
+9. Critérios de aceite por etapa
+10. Entregáveis esperados
+11. Riscos técnicos principais
+12. Decisões e perguntas pendentes para fechamento contratual
+13. Referências técnicas internas
+14. Checklist final antes de iniciar o desenvolvimento
+15. Nota de segurança para compartilhamento
+Apêndice — Contexto usado na preparação
+
+
+1. Sumário executivo
+Este documento consolida o handoff técnico para a empresa terceirizada responsável por implementar o novo agente IAra multi-tenant.
+
+A entrega esperada é um runtime Python modular, multi-tenant, orquestrado por LangGraph, com entrada por webhooks, validação Pydantic, controle operacional por RabbitMQ + Postgres, integração com Chatwoot via MCP como adapter operacional de provider/plataforma, Agent Tools MCP governadas para ferramentas de negócio, catálogo de MCPs por tenant, configuração publicada em Postgres, memória governada, segurança fail-closed, auditoria sanitizada e critérios claros de aceite.
+
+Esta contratação não é uma implementação de fluxo único N8n, não é um protótipo sem governança e não é um produto SaaS completo. O foco é o agente/runtime e suas integrações seguras.
+
+Resultado esperado ao final:
+
+Agente conversacional multi-tenant operando por grafo LangGraph.
+Contratos Pydantic para entrada, estado, tools, comandos, respostas, auditoria e evidências.
+ProviderAdapter para isolar Chatwoot e futuros providers.
+ChatwootMcpAdapter/ChatwootMcpRegistry para chamadas MCP operacionais de Chatwoot por account/tenant.
+AgentToolMcpGateway/AgentToolRegistry para tools lógicas de negócio, com schema, policy, skill, status e testes.
+Catálogo tenant-scoped de servidores MCP disponíveis, solicitados, em sandbox, ativos ou suspensos.
+Persistência operacional em Postgres e filas RabbitMQ para backpressure/redelivery.
+Outbox/readback/idempotência para todo side effect externo.
+Dashboard/config organizer como superfície administrativa de draft e publicação segura, se incluído na etapa contratada.
+Evidências sanitizadas e documentação suficiente para operação, manutenção, rollback e auditoria.
+
+
+
+2. Princípios obrigatórios
+2.1. LangGraph é o baseline de orquestração
+A implementação deve modelar o fluxo como grafo LangGraph, com:
+
+State explícito.
+Nodes nomeados e testáveis.
+Subgraphs para mídia, tools, kanban, CommandAssistant e rotinas especializadas.
+Edges condicionais documentadas.
+Checkpoints para retomada de execução.
+Retries por node, com idempotência externa.
+Interrupções/HITL para decisões humanas quando necessário.
+Versionamento de flow/config/prompt/tool policy por execução.
+
+Pipeline simples só pode existir como harness local, protótipo sem side effects ou lógica interna de um node. Ele não substitui o contrato arquitetural LangGraph.
+2.2. Python modular e testável
+O grafo não deve esconder regra de negócio. Cada node deve chamar módulos Python isolados, com testes unitários e de integração fake/stub.
+
+Stack técnica recomendada:
+
+FastAPI para entrypoints HTTP/webhooks.
+Pydantic v2 para schemas, validação, aliases, serialização e redaction.
+LangGraph para orquestração stateful.
+RabbitMQ para transporte, backpressure e redelivery.
+Postgres para idempotência, leases, debounce, outbox, auditoria, configuração, memória semântica governada e checkpoints.
+2.3. Chatwoot é provider/plataforma, não canal
+Nomenclatura obrigatória:
+
+provider/platform: sistema externo integrado pelo runtime, por exemplo Chatwoot.
+source_channel ou inbox_channel_type: canal real dentro do Chatwoot, por exemplo WhatsApp, Instagram, Facebook/Messenger, Email, Website, API etc.
+inbox_id: instância concreta do canal dentro da account Chatwoot.
+ProviderAdapter: interface que adapta um provider/plataforma ao runtime.
+ChatwootMcpAdapter: implementação do ProviderAdapter para operar Chatwoot via MCP.
+ChatwootMcpRegistry: registry explícita de capabilities reais do Chatwoot MCP por tenant/account.
+
+O LLM nunca deve receber catálogo bruto de MCP Chatwoot nem decidir nome real de tool MCP. O runtime deve resolver capabilities por registry explícita e policy.
+2.4. Duas camadas MCP distintas
+Camada 1 — MCP operacional de provider/plataforma:
+Exemplo principal: Chatwoot MCP.
+Uso interno pelo ProviderAdapter.
+Não exposto livremente ao agente.
+Protegido por registry, allowlist, denylist, risk class, account binding, idempotência e readback.
+Camada 2 — Agent Tools MCP:
+Ferramentas de negócio do agente, expostas por nomes lógicos.
+Exemplos: disponibilidade, agendar, qualificado, desqualificado, kanban_analisar_conversa, campanha_criar_rascunho, campanha_validar_publico, campanha_disparar_lote, followup_reengajar_conversa, kb_sugerir_atualizacao, historico_analisar_conversas, voice_responder_audio.
+Cada tool exige schema, descrição, skill de uso, policy, status, binding de backend e testes.
+2.5. Fail-closed e anti-cross-tenant
+Qualquer dúvida de tenant/account/inbox/source_channel/capability deve bloquear a operação. Não deve haver fallback permissivo, inferência por similaridade nem execução em account errada.
+
+
+3. Escopo contratado
+Entram no escopo de contratação do agente/runtime:
+3.1. Atendimento conversacional
+Receber eventos de conversa.
+Filtrar eventos não elegíveis.
+Construir contexto seguro.
+Responder ao lead conforme prompt/config publicada.
+Acionar handoff humano quando necessário.
+Aplicar anti-loop, baixa confiança e guardrails.
+3.2. Entrada, normalização e elegibilidade
+Webhook HTTP/FastAPI.
+Tenant resolver.
+Validação de headers/body.
+NormalizedChatwootEvent.
+EligibilityDecision.
+Cálculo de correlation_id, idempotency_key e raw_hash.
+Rejeição/ignorar eventos outgoing, bot/system, private ou fora de escopo.
+Enriquecimento read-only controlado quando faltar campo essencial.
+3.3. Controle operacional
+RabbitMQ para jobs, wakeups, backpressure e redelivery.
+Postgres como fonte de verdade para event_receipts, conversation_debounce, conversation_run_leases, provider_command_outbox, agent_runs, runtime_run_steps, runtime_errors, auditoria e checkpoints.
+Debounce por conversa.
+Lease/fencing token para evitar concorrência.
+Idempotência por evento, comando e destinatário.
+DLX/retry/backoff.
+Readback antes de marcar side effect como concluído.
+3.4. Mídia e arquivos
+Subgraph MediaUnderstanding antes do agente principal.
+Áudio: transcrição detalhada.
+Imagens/documentos escaneados: OCR/descrição visual quando configurado.
+PDFs/DOCX/PPTX/XLSX/texto: extração textual quando suportado.
+Fallback explícito: partial, unsupported ou failed.
+Arquivo bruto, base64, URL temporária e headers não entram no State, prompt, log ou evidência.
+3.5. Contexto, memória, prompt e KB
+ConversationContext limpo e redigido.
+Histórico recente permitido apenas como contexto operacional, não memória semântica automática.
+Prompt/config somente de versões publicadas.
+KB consultiva segmentada e segura.
+Memória semântica governada por namespace, TTL, consentimento, retenção, purge/anonymize e redaction.
+Checkpoint LangGraph separado de memória semântica.
+3.6. Agent Tools MCP
+AgentToolRegistry.
+AgentToolMcpGateway.
+ToolPolicyGuard.
+ToolSkillResolver.
+ToolExecutor.
+ToolInvocationRequest/ToolInvocationResult.
+Side effects por outbox/readback.
+Apenas tools active/publicadas aparecem ao agente.
+
+Tools iniciais esperadas:
+
+disponibilidade.
+agendar.
+cancelar.
+reagendar.
+qualificado.
+desqualificado.
+kanban_analisar_conversa.
+kanban_atualizar_status, quando policy permitir.
+kanban_comentar, quando policy permitir.
+lead_buscar.
+historico_analisar_conversas.
+followup_reengajar_conversa.
+campanha_criar_rascunho.
+campanha_validar_publico.
+campanha_solicitar_aprovacao.
+campanha_disparar_lote.
+campanha_status.
+campanha_cancelar_pendentes.
+kb_sugerir_atualizacao.
+voice_responder_audio.
+3.7. Agenda e sistemas de domínio
+Google Agenda/Calendar como managed/default possível.
+Clinicorp como managed/default possível.
+Adapter próprio/custom por tenant quando solicitado e aprovado.
+Consultar disponibilidade antes de confirmar agendamento.
+Escritas com idempotência, outbox, readback e fallback/handoff em ambiguidade.
+3.8. Qualificação, handoff e notificações
+Qualificação como operação composta: critério, label permitida, nota privada segura, notificação interna configurada e readback.
+Handoff humano com motivo, contexto seguro e sem vazar prompt/memória interna.
+Falha parcial deve ser registrada de forma explícita e segura.
+3.9. Kanban operacional
+ConversationKanbanSubagent como subgraph/tool governada.
+Primeira entrega recomendada: suggest_only.
+Escritas em Chatwoot só com kanban_policy publicada, outbox, idempotência e readback.
+Status nativo do Chatwoot não deve ser confundido automaticamente com etapa de negócio.
+Comentários de kanban devem ser notas privadas seguras, nunca mensagens públicas.
+3.10. CommandAssistant e campanhas/outbound
+CommandAssistantSubgraph separado do atendimento ao lead.
+Comandos administrativos apenas para autores/números autorizados por CommandRequesterBinding.
+Telefone bruto não é autorização suficiente.
+Campanhas são high-risk.
+Default seguro: draft_only/dry_run.
+Envio real apenas em approved_send, com policy, opt-out/consentimento, template/canal compatível, rate limit, HITL quando exigido, outbox por destinatário, idempotência e readback.
+Evidência nunca pode conter lista integral de contatos.
+3.11. Follow-up individual
+Follow-up em conversa existente, separado de campanha em massa.
+Respeitar opt-out, quiet hours, tentativas máximas, contexto suficiente e policy por tenant.
+Side effect por outbox/readback.
+3.12. Análise histórica e atualização de KB
+Análise histórica ampla somente quando autorizada.
+Modo read-only/sensitive, com redaction.
+Não persistir conversa bruta por padrão.
+Saídas devem virar drafts revisáveis: KnowledgeBootstrapDraft, PromptConfigDraft, KbUpdateDraft.
+KB via WhatsApp ou comando operacional nunca publica direto; gera draft para revisão/HITL.
+3.13. Voz/áudio outbound
+voice_responder_audio governado por voice_output_policy.
+Provider/modelo/voz/credential_ref no runtime, nunca no prompt.
+Guardrails antes de TTS.
+Fallback obrigatório para texto.
+Sem persistir áudio bruto em evidência.
+3.14. Catálogo de MCPs por tenant
+tenant_mcp_servers como catálogo tenant-scoped.
+MCPs managed/default possíveis: Chatwoot, Google Agenda, Clinicorp.
+MCP customizado do cliente entra por request, sandbox/read-only, discovery, risk classification, mapping, policy/skill, QA/HITL e publicação transacional.
+Prompt final recebe apenas tools lógicas ativas; nunca catálogo bruto de servidores/tools MCP.
+3.15. Dashboard e Agent Config Organizer
+Dashboard App externo no Chatwoot pode ser superfície administrativa da primeira entrega.
+Chatwoot iframe não deve receber tokens nem publicar produção diretamente.
+Backend IAra valida origem, account, tenant, usuário e permissão.
+Agent Config Organizer é grafo administrativo separado: cria drafts, simula, valida e prepara publicação.
+PublishService deve ser determinístico e transacional.
+4. Não-escopo
+Ficam fora da contratação inicial, salvo aditivo explícito:
+
+Produto IAra completo/SaaS amplo.
+Marketplace.
+Growth, campanhas de marketing fora das capacidades governadas descritas.
+Animações, troféus, branding, landing pages e UX não relacionada ao runtime do agente.
+Onboarding inteligente amplo de produto.
+Google Reviews como gate obrigatório inicial.
+Agente observador geral.
+Copilot de campos fora do runtime contratado.
+CRM pós-call/prontuário/ficha/ERP amplo, salvo adapter específico aprovado.
+Publicação de prompts, KBs ou configs sem QA/HITL quando exigido.
+Alteração de produção/tenants reais sem autorização explícita da Digi2B.
+Uso de exports brutos, pinData, tokens, account IDs reais, URLs temporárias ou payloads live como evidência externa.
+5. Arquitetura-alvo em alto nível
+Fluxo conceitual:
+
+Webhook HTTP recebe evento.
+Auth/tenant/account/inbox/source_channel são validados.
+Evento bruto é referenciado por hash/ref seguro; payload bruto não é persistido por padrão.
+Pydantic normaliza para NormalizedChatwootEvent.
+EligibilityDecision aceita, ignora, rejeita ou pede enriquecimento read-only.
+Idempotência e debounce são registrados em Postgres.
+Wakeup/job é enviado ao RabbitMQ.
+Worker consome job, faz claim de lease por conversa e inicia/retoma LangGraph.
+MediaUnderstanding processa áudio/imagens/documentos antes do agente.
+ConversationContext é montado com histórico permitido, memória governada, KB, config publicada e tools ativas.
+Agente principal decide resposta e possíveis tool calls lógicas.
+ToolPolicyGuard valida cada tool call.
+Tools com side effect viram comandos/outbox, não chamadas diretas reexecutáveis.
+Guardrails normalizam resposta e impedem vazamentos.
+ProviderCommand é executado pelo ProviderAdapter/ChatwootMcpAdapter.
+Readback confirma side effect.
+Auditoria sanitizada registra status, hashes, refs e versões usadas.
+6. Componentes mínimos a implementar
+6.1. APIs/entrypoints
+POST /webhooks/chatwoot/{tenant_key}
+Endpoint administrativo/sandbox para healthcheck controlado.
+Eventual endpoint para CommandAssistant, caso a entrada administrativa não use o mesmo roteador.
+Health/readiness/liveness.
+6.2. Schemas Pydantic
+RawEventRef.
+SecurityContext.
+TenantContext.
+NormalizedChatwootEvent / CanonicalMessageEvent.
+CanonicalAttachment.
+EligibilityDecision.
+ConversationState.
+MediaContext.
+ConversationContext.
+AgentInput / AgentOutput.
+ToolInvocationRequest / ToolInvocationResult.
+ProviderCommand.
+ProviderMutationResult.
+OperationalAction.
+SanitizedEvidence.
+6.3. Camada de provider
+ProviderAdapter protocol/interface.
+ChatwootMcpAdapter.
+ChatwootMcpRegistry.
+CapabilityResolution.
+ProviderSecurityContext.
+ProviderErrorMapper.
+Readback service.
+6.4. Runtime LangGraph
+Conversational graph.
+MediaUnderstanding subgraph.
+Tool execution subgraph.
+ConversationKanbanSubagent.
+CommandAssistantSubgraph.
+Guardrails/response normalization.
+HITL/interrupt points.
+Checkpointer/store integration.
+Flow versioning.
+6.5. Persistência e filas
+Topologia RabbitMQ com retry/DLX/backoff.
+Migrations/DDL Postgres.
+Ledger de idempotência.
+Tabela de debounce.
+Lease/fencing de conversa.
+Outbox do provider.
+Eventos de auditoria.
+Tabelas de configuração/publicação.
+Tabelas de Agent Tools.
+Tabelas do catálogo MCP por tenant.
+Tabelas de políticas de campanha, follow-up, histórico e voz, quando incluídas.
+6.6. Configuration/publishing
+Draft -> validate -> review/HITL -> publish.
+Runtime lê apenas publicação ativa.
+Versões publicadas são imutáveis.
+Rollback sem apagar versões.
+Segredos somente por secret_ref/credential_ref.
+6.7. Observability
+correlation_id por run.
+runtime_run_steps.
+status por node/tool/command.
+erros sanitizados.
+métricas de debounce, idempotência, retries, readback e falhas de MCP.
+relatório de evidência sem dados sensíveis.
+7. Modelo de dados mínimo
+A terceirizada deve propor DDL/migrations compatíveis com as entidades abaixo.
+
+Runtime operacional:
+
+tenants.
+provider_accounts.
+provider_inboxes.
+event_receipts.
+conversation_inbox.
+conversation_debounce.
+conversation_run_leases.
+graph_checkpoints.
+agent_runs.
+runtime_run_steps.
+runtime_errors.
+provider_command_outbox.
+safe_audit_events.
+media_artifacts.
+
+Configuração e publicação:
+
+agent_profiles.
+agent_config_versions.
+agent_config_sections.
+config_publications.
+prompt_versions.
+memory_policy_versions.
+tool_policy_versions.
+
+Tools e MCPs:
+
+agent_tool_servers.
+agent_tool_bindings.
+agent_tool_skills.
+agent_tool_policies.
+external_provider_bindings.
+notification_targets.
+kanban_policies.
+kanban_review_events.
+tool_invocation_events.
+tool_side_effects.
+tool_health_checks.
+tenant_mcp_servers.
+tenant_mcp_server_tools.
+tenant_mcp_tool_mappings.
+tenant_mcp_integration_requests.
+
+CommandAssistant/campanhas/follow-up:
+
+command_requester_bindings.
+campaign_policies.
+campaign_drafts.
+campaign_approvals.
+campaign_runs.
+campaign_recipients.
+outbound_message_attempts.
+followup_policies.
+
+Memória, histórico, KB e voz:
+
+agent_memory_items.
+memory_write_candidates.
+memory_access_events.
+history_bootstrap_policies.
+kb_update_drafts.
+voice_output_policies.
+8. Segurança, LGPD e redaction
+8.1. Proibições absolutas
+É proibido inserir em repositório, documento, log ou evidência:
+
+tokens;
+headers sensíveis;
+cookies;
+credenciais;
+account IDs reais;
+telefones brutos;
+payload bruto de webhook;
+pinData;
+URLs temporárias;
+anexos brutos;
+áudio/imagem/base64;
+dumps MCP completos;
+lista integral de leads;
+conteúdo integral de conversas;
+prompt interno sensível;
+chain-of-thought.
+8.2. Regras obrigatórias
+Credenciais somente por secret_ref/credential_ref.
+Mensagens privadas não entram em prompt, memória, resposta ou evidência detalhada.
+Dados pessoais/sensíveis exigem minimização, finalidade, TTL, redaction, opt-out e purge/anonymize.
+Dados de saúde devem ser tratados como sensíveis.
+Evidência deve usar hashes, contagens, refs seguras, status e erros sanitizados.
+Cross-tenant deve falhar fail-closed antes de qualquer chamada externa.
+Writes precisam de idempotência e readback.
+Writes high-risk exigem policy e, quando aplicável, HITL.
+Campanhas exigem consentimento/opt-out, janela/canal/template compatível, rate limit, aprovação e trilha de auditoria.
+Produção não pode ser acessada sem autorização explícita da Digi2B.
+
+9. Critérios de aceite por etapa
+G0 — Entendimento e plano
+Aceite:
+
+Terceirizada confirma nomenclatura obrigatória.
+Escopo e não-escopo estão assinados.
+Plano de implementação por fases entregue.
+Nenhum segredo ou payload real foi solicitado para entendimento.
+
+Bloqueia GO:
+
+Proposta de expor Chatwoot MCP bruto ao LLM.
+Proposta de pipeline simples como arquitetura principal.
+Proposta de teste direto em produção sem gates.
+G1 — Schemas e contratos locais
+Aceite:
+
+Schemas Pydantic v2 implementados.
+Testes de payload sintético para incoming, outgoing, bot, private, account divergente, anexos, áudio, campos extras e dados sensíveis.
+model_dump/redaction não vaza campos sensíveis.
+Erros são seguros.
+G2 — ProviderAdapter, registry e MCP fake/stub
+Aceite:
+
+ProviderAdapter e ChatwootMcpAdapter fake/stub implementados.
+Capabilities resolvidas por registry explícita.
+Allowlist/denylist funcionando.
+Account mismatch falha fail-closed.
+Writes recusam payload inválido e exigem readback.
+G3 — MCP read-only controlado
+Aceite:
+
+account_context, account_actions_list, messages_list e leitura de labels/conversa testadas em ambiente controlado.
+Evidência contém apenas refs, contagens, hashes e status.
+Mensagens privadas excluídas ou registradas só como flag/contagem.
+G4 — Controle operacional
+Aceite:
+
+RabbitMQ + Postgres operando conforme baseline.
+Testes de webhook duplicado, rajada, dois workers, redelivery, lease expirado e retomada LangGraph.
+Side effects não duplicam após retry/checkpoint.
+Outbox/readback implementados.
+G5 — Agent Tools MCP e side effects sandbox
+Aceite:
+
+Apenas tools active aparecem ao agente.
+Agenda consulta disponibilidade antes de agendar.
+Qualificação e notificações respeitam policy.
+Kanban inicia suggest_only ou modo aprovado.
+Campanhas iniciam draft_only/dry_run; envio real só approved_send.
+KB update gera draft, não publicação direta.
+Voz tem policy e fallback textual.
+Todos os writes têm outbox, idempotência e readback.
+G6 — Piloto controlado
+Aceite:
+
+Incoming válido gera uma resposta uma vez.
+Outgoing/bot/private não aciona resposta.
+Debounce, redelivery e concorrência não duplicam mensagens.
+Mídia passa por MediaUnderstanding antes do agente.
+Guardrails rodam antes da resposta.
+Logs e evidências sem segredos/payload bruto.
+Rollback operacional documentado.
+10. Entregáveis esperados
+A terceirizada deve entregar, no mínimo:
+
+Código e arquitetura:
+
+Repositório com estrutura Python modular.
+Grafo LangGraph documentado.
+Schemas Pydantic.
+ProviderAdapter e ChatwootMcpAdapter.
+ChatwootMcpRegistry.
+AgentToolMcpGateway e AgentToolRegistry.
+CommandAssistantSubgraph, se incluído na fase.
+MediaUnderstanding subgraph.
+Runtime workers e filas.
+Migrations/DDL Postgres.
+
+Qualidade:
+
+Testes unitários.
+Testes de integração fake/stub.
+Testes de sandbox MCP read-only.
+Testes de idempotência, debounce, retry, lease, redelivery e readback.
+Testes de redaction/segurança.
+Relatório de cobertura ou matriz de cenários.
+
+Operação:
+
+Runbook local/sandbox/piloto.
+Guia de configuração por tenant.
+Guia de secret_ref/credential_ref.
+Plano de rollback.
+Health checks.
+Evidências sanitizadas por gate.
+Lista de pendências e riscos residuais.
+
+Documentação:
+
+Arquitetura e diagrama lógico atualizados.
+DER lógico/físico ou justificativa do escopo entregue.
+Contratos de API/schemas.
+Contratos das tools.
+Matriz de policies.
+Matriz de permissões/HITL.
+Checklist de aceite assinado.
+11. Riscos técnicos principais
+Cross-tenant/account mismatch: mitigar com binding explícito, registry e fail-closed.
+Inferência de nomes MCP: proibida; usar ChatwootMcpRegistry.
+Duplicidade de mensagens/side effects: mitigar com Postgres idempotency ledger, outbox, readback e fencing token.
+Retomada LangGraph reexecutando ação externa: side effects nunca diretos em node reexecutável.
+Debounce/concorrência por conversa: usar conversation_debounce e conversation_run_leases.
+Mensagens privadas vazando: excluir do prompt/memória/evidência por padrão.
+Payload bruto/URLs temporárias/anexos em logs: proibir e testar redaction.
+Campanhas sem governança: exigir CommandRequesterBinding, policy, HITL, opt-out, rate limit, outbox e readback.
+MCP customizado inseguro: sandbox, egress/roots restritos, discovery sanitizado e risk classification.
+Memória longa sem política: começar mínima/desabilitada se política não estiver fechada.
+Confundir status Chatwoot com kanban de negócio: usar kanban_policy por tenant.
+Mídia não processada gerando resposta inventada: MediaUnderstanding obrigatório.
+Dashboard virar fonte de verdade: Postgres publicado é a fonte canônica.
+12. Decisões e perguntas pendentes para fechamento contratual
+Antes do início da implementação, alinhar:
+
+Quais funcionalidades entram na primeira entrega obrigatória versus backlog técnico.
+Quais tenants/accounts/inboxes serão usados no piloto controlado.
+Backend prioritário de agenda: Google Agenda, Clinicorp ou adapter próprio.
+Quais writes entram em sandbox e quais ficam bloqueados.
+Modo inicial do kanban: suggest_only, write_sandbox ou write_confirmed.
+Modo inicial de campanhas: draft_only, dry_run, sandbox ou approved_send.
+Quem aprova ações high-risk por tenant/ambiente.
+Quem mantém tenant_mcp_servers e aprova MCP customizado.
+Política de retenção/TTL/purge/anonymize.
+Responsável por LGPD/security review/DPA/NDA.
+Ambiente de sandbox e dados sintéticos disponíveis.
+SLA de correção para falhas críticas de segurança.
+Se dashboard/config organizer entra na primeira entrega ou em etapa posterior.
+Se DER detalhado e página visual detalhada serão entregues agora ou ficam como backlog visual.
+
+13. Checklist final antes de iniciar o desenvolvimento
+Escopo contratado aprovado.
+Não-escopo aprovado.
+Plano por fases aprovado.
+Ambientes local, fake/stub, sandbox e piloto definidos.
+Critérios G0-G6 aceitos.
+Responsáveis por HITL definidos.
+Policies iniciais definidas.
+Tenant/account/inbox piloto definidos com segurança.
+Secret/credential management definido.
+Matriz de dados sensíveis e redaction aprovada.
+Runbook de rollback exigido.
+Evidência sanitizada como padrão contratual.
+Produção bloqueada até autorização explícita.
+14. Nota de segurança para compartilhamento
+Este documento foi preparado para compartilhamento externo com uma empresa terceirizada. Ele descreve arquitetura, contratos, responsabilidades e critérios de aceite sem incluir credenciais, tokens, dados reais de tenants, account IDs reais, telefones reais, payloads brutos, pinData, URLs temporárias ou dumps live.
+
+Qualquer material adicional solicitado pela terceirizada deve seguir a mesma regra: fornecer somente amostras sintéticas ou evidências sanitizadas, salvo autorização explícita da Digi2B para um ambiente controlado.
+Apêndice — Contexto usado na preparação
+Contexto mínimo do harness: separação de camadas source, prompt, KB, tools, runtime, qualidade, decisões e padrão global.
+Pacote de planejamento ativo: padrão Python modular com Chatwoot MCP.
+Nota durável Obsidian consultada: Planejamento padrão Python modular Chatwoot MCP.
+Orquestração read-only entre perfis virtuais: digi2b-arch, digi2b-runtime e digi2b-qa/docs.
+Sem acesso a produção e sem alteração de tenants reais.

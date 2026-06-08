@@ -1,0 +1,51 @@
+Comandos úteis:
+# aplica lint
+make format
+
+# testes unitários e de integração
+make test
+
+# 1. Instala dependências
+make install          
+Ajustar .env na raiz seguindo o exemplo
+
+2. Sobe infra + migrations
+# PostgreSQL + RabbitMQ via Docker
+make up    
+
+# cria as tabelas
+make migrate   
+
+3. Roda a API (terminal 1)
+make run
+
+4. Roda o worker (terminal 2)
+make worker
+
+5. Registra um tenant de teste
+
+docker exec -it iara_postgres psql -U iara -d iara_dev -c "
+INSERT INTO tenants (id, tenant_key, name, status, provider, provider_account_id)
+VALUES (gen_random_uuid(), 'meu_tenant', 'Teste', 'sandbox', 'chatwoot', '11111');
+"
+
+6. Dispara um webhook de teste
+
+curl -X POST http://localhost:8000/webhooks/chatwoot/meu_tenant \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event": "message_created",
+    "id": "evt-001",
+    "account": {"id": "11111"},
+    "inbox": {"id": "inbox_001", "channel_type": "Channel::Whatsapp"},
+    "conversation": {"id": "conv_001"},
+    "message": {
+      "id": "msg-001",
+      "content": "Olá, quero agendar uma consulta",
+      "message_type": "incoming",
+      "private": false,
+      "sender": {"type": "contact"}
+    }
+  }'
+
+# Resposta: {"status": "accepted", "correlation_id": "..."}

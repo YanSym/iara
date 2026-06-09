@@ -21,8 +21,8 @@ async def main() -> None:
     """Main worker loop.
 
     Starts:
-    1. RabbitMQ job consumer (conversation processing jobs)
-    2. Outbox drainer (pending provider commands)
+    1. RabbitMQ job consumer (conversation processing jobs — uses Postgres checkpointer)
+    2. Outbox drainer (pending provider commands — wired to ChatwootMcpAdapter)
     """
     settings = get_settings()
     configure_logging(level=settings.log_level, log_format=settings.log_format)
@@ -43,8 +43,20 @@ async def main() -> None:
     loop.add_signal_handler(signal.SIGTERM, handle_shutdown)
     loop.add_signal_handler(signal.SIGINT, handle_shutdown)
 
+    # Wire the ChatwootMcpAdapter so outbox commands actually reach Chatwoot.
+    from iara.provider.chatwoot.mcp_adapter import ChatwootMcpAdapter
+    from iara.provider.chatwoot.mcp_registry import ChatwootMcpRegistry
+
+    chatwoot_adapter = ChatwootMcpAdapter(
+        registry=ChatwootMcpRegistry(),
+        mcp_base_url=settings.chatwoot_mcp_base_url,
+        credential_ref=settings.chatwoot_mcp_credential_ref,
+        timeout_seconds=settings.chatwoot_mcp_timeout_seconds,
+        max_retries=settings.chatwoot_mcp_max_retries,
+    )
+
     job_consumer = JobConsumerWorker(settings=settings)
-    outbox_drainer = OutboxDrainerWorker(settings=settings)
+    outbox_drainer = OutboxDrainerWorker(settings=settings, adapter=chatwoot_adapter)
 
     tasks = [
         asyncio.create_task(

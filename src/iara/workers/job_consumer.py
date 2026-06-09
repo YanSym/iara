@@ -40,13 +40,55 @@ class JobConsumerWorker:
     async def start(self, shutdown_event: asyncio.Event) -> None:
         """Start consuming jobs until shutdown_event is set.
 
+        When no graph was pre-injected, builds the production graph using a
+        Postgres checkpointer (falls back to MemorySaver if the package is
+        unavailable or the DB is unreachable).
+
         Args:
             shutdown_event: Signals graceful shutdown.
         """
         if self._graph is None:
-            from iara.graph.builder import build_production_graph
+            await self._build_graph_with_checkpointer(shutdown_event)
+            return
 
+        await self._run_consumer(shutdown_event)
+
+    async def _build_graph_with_checkpointer(self, shutdown_event: asyncio.Event) -> None:
+        """Build the production graph with a Postgres checkpointer and run.
+
+        The checkpointer connection pool is kept alive for the entire duration
+        of the worker via the async context manager.
+        """
+        from iara.graph.builder import build_production_graph
+
+        try:
+            from iara.persistence.checkpointer import postgres_checkpointer
+
+            async with postgres_checkpointer(self._settings.database_url) as checkpointer:
+                self._graph = build_production_graph(self._settings, checkpointer=checkpointer)
+                await self._run_consumer(shutdown_event)
+        except ImportError:
+            logger.warning(
+                "postgres_checkpointer_unavailable_using_memory",
+                reason="langgraph-checkpoint-postgres not installed",
+            )
             self._graph = build_production_graph(self._settings)
+            await self._run_consumer(shutdown_event)
+        except Exception as exc:
+            logger.warning(
+                "postgres_checkpointer_failed_using_memory",
+                error_code=type(exc).__name__,
+                error_summary=str(exc)[:200],
+            )
+            self._graph = build_production_graph(self._settings)
+            await self._run_consumer(shutdown_event)
+
+    async def _run_consumer(self, shutdown_event: asyncio.Event) -> None:
+        """Run the RabbitMQ consumer loop.
+
+        Args:
+            shutdown_event: Signals graceful shutdown.
+        """
 
         self._connection = await aio_pika.connect_robust(self._settings.rabbitmq_url)
 
@@ -76,6 +118,9 @@ class JobConsumerWorker:
         correlation_id = payload.get("correlation_id", str(uuid.uuid4()))
         idempotency_key = payload.get("idempotency_key", "")
         content = payload.get("content") or ""
+        attachments = payload.get("attachments") or []
+        sender_type = payload.get("sender_type", "contact")
+        sender_ref = payload.get("sender_ref", "")
 
         log = logger.bind(
             tenant_ref=tenant_id[:8] if tenant_id else "unknown",
@@ -119,6 +164,9 @@ class JobConsumerWorker:
                 "metadata": {
                     "idempotency_key": idempotency_key,
                     "event_ref": payload.get("event_ref", ""),
+                    "attachments": attachments,
+                    "sender_type": sender_type,
+                    "sender_ref": sender_ref,
                 },
             }
 

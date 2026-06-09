@@ -1,51 +1,104 @@
-Comandos úteis:
-# aplica lint
-make format
+IAra é um runtime para agentes conversacionais LLM multi-tenant em SaaS. O fluxo é:
 
-# testes unitários e de integração
-make test
+1. Webhook do Chatwoot → resolve tenant → normaliza evento → checa elegibilidade
+IAra é um runtime para agentes conversacionais LLM multi-tenant em SaaS. O fluxo é:
 
-# 1. Instala dependências
-make install          
-Ajustar .env na raiz seguindo o exemplo
+1. Webhook do Chatwoot → resolve tenant → normaliza evento → checa elegibilidade
+2. RabbitMQ → JobConsumerWorker adquire lease → executa grafo LangGraph
+3. LangGraph → 7 nós: eligibility → media → context → agent (LLM) → tools → guardrails → dispatch
+4. Outbox Pattern → comands pendentes no Postgres → OutboxDrainerWorker executa via adapter → readback
+5. Resposta → volta para o contato no Chatwoot
 
-2. Sobe infra + migrations
-# PostgreSQL + RabbitMQ via Docker
-make up    
+Infraestrutura: FastAPI + LangGraph + Anthropic/OpenAI + RabbitMQ + PostgreSQL + SQLAlchemy async.
 
-# cria as tabelas
-make migrate   
+---
+Bugs e gargalos encontrados
 
-3. Roda a API (terminal 1)
+Bug 1 — CRÍTICO: Comandos falhos nunca são reprocessados (outbox_drainer.py)
+
+mark_failed() seta status="failed", mas fetch_pending_all() filtra apenas status="pending". Resultado: um comando que falha é abandonado para sempre. O código de max_retries/dead-letter nunca é executado — é código morto.
+
+Bug 2 — CRÍTICO: build_production_graph não injeta gateway nem outbox (graph/builder.py)
+
+build_production_graph só injeta o LLM. gateway=None e outbox_service=None fazem os nós tool_executor e command_dispatch usarem o modo stub de teste, retornando resultados falsos e nunca despachando mensagens ao Chatwoot.
+
+Bug 3 — MODERADO: Eligibility aceita eventos sem message_type (eligibility/decision.py)
+
+Eventos como conversation_created têm message_type=None. As regras 2 e 3 do checker só rejeitam OUTGOING/ACTIVITY/TEMPLATE — None passa por tudo e o agente é acionado sem mensagem real.
+
+Bug 4 — MENOR: fetch_pending_all ignora scheduled_at para backoff
+
+A query ordena por scheduled_at mas não filtra por ele. Quando o retry com backoff for implementado, o filtro precisa existir.
+
+Bug 5 — MENOR: hash_for_ref em redaction.py é código morto
+
+Definida mas nunca chamada no codebase inteiro.
+
+---
+Vou corrigir os bugs 1, 3 e 4 agora (são concretos e não precisam de redesign). Bug 2 é arquitetural (requer wiring completo da cadeia de dependências). Bug 5 é apenas dead code.
+
+● Update(src/iara/eligibility/decision.py)
+Added 10 lines, removed 1 line
+                "account binding mismatch",
+            )
+
+5. Resposta → volta para o contato no Chatwoot
+
+Infraestrutura: FastAPI + LangGraph + Anthropic/OpenAI + RabbitMQ + PostgreSQL + SQLAlchemy async.
+
+Pré-requisitos
+
+# Python 3.13 + uv
+uv sync --all-groups
+
+# Copiar env
+cp .env.example .env
+# Editar .env: definir OPENAI_API_KEY ou ANTHROPIC_API_KEY
+
+Subir infra (Postgres + RabbitMQ)
+
+make up
+
+Rodar migrations
+
+make migrate
+
+Testes (sem infra externa)
+
+# todos os 113 testes
+make test 
+
+Rodar a API
+
+# Terminal 1
+# FastAPI em http://localhost:8000
 make run
 
-4. Roda o worker (terminal 2)
+Rodar o worker
+
+# Terminal 2
+# JobConsumer + OutboxDrainer
 make worker
 
-5. Registra um tenant de teste
+Interface de teste (Streamlit)
 
-docker exec -it iara_postgres psql -U iara -d iara_dev -c "
-INSERT INTO tenants (id, tenant_key, name, status, provider, provider_account_id)
-VALUES (gen_random_uuid(), 'meu_tenant', 'Teste', 'sandbox', 'chatwoot', '11111');
-"
+# Terminal 3
+# http://localhost:8501
+make ui
 
-6. Dispara um webhook de teste
+Testar o webhook manualmente
 
-curl -X POST http://localhost:8000/webhooks/chatwoot/meu_tenant \
+curl -X POST http://localhost:8000/webhooks/chatwoot/test_tenant_001 \
   -H "Content-Type: application/json" \
   -d '{
     "event": "message_created",
-    "id": "evt-001",
+    "id": "evt-123",
     "account": {"id": "11111"},
-    "inbox": {"id": "inbox_001", "channel_type": "Channel::Whatsapp"},
-    "conversation": {"id": "conv_001"},
     "message": {
-      "id": "msg-001",
-      "content": "Olá, quero agendar uma consulta",
       "message_type": "incoming",
-      "private": false,
-      "sender": {"type": "contact"}
-    }
+      "sender": {"type": "contact"},
+      "content": "Olá, preciso de ajuda",
+      "private": false
+    },
+    "conversation": {"id": "conv-1"}
   }'
-
-# Resposta: {"status": "accepted", "correlation_id": "..."}

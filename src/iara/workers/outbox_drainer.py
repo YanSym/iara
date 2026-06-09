@@ -179,16 +179,31 @@ class OutboxDrainerWorker:
                 await session.commit()
 
         except Exception as exc:
+            next_retry = retry_count + 1
             log.warning(
                 "outbox_command_failed",
                 error_code=type(exc).__name__,
                 error_summary=str(exc)[:200],
-                retry_count=retry_count + 1,
+                retry_count=next_retry,
             )
             async with session_factory() as session:
                 repo = OutboxRepository(session)
-                await repo.mark_failed(
-                    command_id=command_id,
-                    reason=str(exc)[:500],
-                )
+                if next_retry >= self._settings.iara_outbox_max_retries:
+                    # Max retries reached — dead-letter without another attempt.
+                    log.error(
+                        "outbox_command_dead_lettered",
+                        reason="max_retries_exceeded",
+                        retry_count=next_retry,
+                    )
+                    await repo.mark_dead_lettered(
+                        command_id=command_id,
+                        reason="max_retries_exceeded",
+                    )
+                else:
+                    # Back-off and reschedule for a later attempt.
+                    backoff = 30 * (2**retry_count)  # 30s, 60s, 120s, …
+                    await repo.mark_failed_for_retry(
+                        command_id=command_id,
+                        retry_delay_seconds=backoff,
+                    )
                 await session.commit()

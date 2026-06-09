@@ -255,6 +255,37 @@ class SafeAuditEvent(Base):
     __table_args__ = (Index("ix_audit_tenant_type", "tenant_id", "event_type", "recorded_at"),)
 
 
+# ── Semantic memory ───────────────────────────────────────────────────────────
+
+
+class AgentMemoryItem(Base):
+    """Governed semantic memory item for a tenant+namespace.
+
+    Content is always sanitized (no PII). TTL, consent, and LGPD anonymize
+    are first-class fields so compliance operations are simple single-row ops.
+    """
+
+    __tablename__ = "agent_memory_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    namespace: Mapped[str] = mapped_column(String(512), nullable=False)
+    item_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    ttl_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90)
+    consent_ref: Mapped[str | None] = mapped_column(String(256))
+    is_anonymized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("namespace", "item_key", name="uq_memory_namespace_key"),
+        Index("ix_memory_tenant_namespace", "tenant_id", "namespace"),
+        Index("ix_memory_expires_at", "expires_at"),
+    )
+
+
 # ── Configuration & publishing tables ─────────────────────────────────────────
 
 

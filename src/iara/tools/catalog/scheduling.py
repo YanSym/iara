@@ -2,6 +2,10 @@
 
 All write operations emit ProviderCommands to the outbox; they never execute
 provider calls directly (INV-04). Read operations return sanitized data.
+
+The module-level ``_SCHEDULING_ADAPTER`` singleton is set by
+``build_production_graph`` at startup. Defaults to NullSchedulingAdapter so
+availability checks degrade gracefully when no backend is configured.
 """
 
 from __future__ import annotations
@@ -10,15 +14,22 @@ import uuid
 from typing import Any
 
 from iara.observability.logging import get_logger
+from iara.provider.scheduling.null_adapter import NullSchedulingAdapter
 
 logger = get_logger(__name__)
 
+# Injected by build_production_graph → _inject_scheduling_adapter().
+_SCHEDULING_ADAPTER: Any = NullSchedulingAdapter()
+
 
 async def handle_availability(arguments: dict[str, Any]) -> dict[str, Any]:
-    """Check available appointment slots.
+    """Check available appointment slots via the configured scheduling backend.
+
+    Delegates to the module-level ``_SCHEDULING_ADAPTER``. Never returns PII.
 
     Args:
-        arguments: Validated tool arguments (date_range_start, date_range_end, service_type).
+        arguments: Validated tool arguments (date_range_start, date_range_end,
+            service_type, tenant_id, calendar_id).
 
     Returns:
         dict[str, Any]: Sanitized availability summary (counts, next slot — no PII).
@@ -26,22 +37,24 @@ async def handle_availability(arguments: dict[str, Any]) -> dict[str, Any]:
     date_start = arguments.get("date_range_start", "")
     date_end = arguments.get("date_range_end", "")
     service_type = arguments.get("service_type", "general")
+    tenant_id = arguments.get("tenant_id", "")
+    calendar_id = arguments.get("calendar_id", "primary")
 
     logger.info(
         "tool_availability_check",
         date_start=date_start,
         date_end=date_end,
         service_type=service_type,
+        provider=getattr(_SCHEDULING_ADAPTER, "provider_name", "unknown"),
     )
 
-    # In production: delegate to Google Calendar / ClinicOrp MCP via outbox.
-    # Return counts and the next available slot — never raw contact data.
-    return {
-        "available_slots_count": 3,
-        "next_available_slot": f"{date_start}T09:00:00",
-        "service_type": service_type,
-        "note": "Availability is illustrative; connect Google Calendar MCP for real data.",
-    }
+    return await _SCHEDULING_ADAPTER.check_availability(
+        tenant_id=tenant_id,
+        date_range_start=date_start,
+        date_range_end=date_end,
+        service_type=service_type,
+        calendar_id=calendar_id,
+    )
 
 
 def build_schedule_command(

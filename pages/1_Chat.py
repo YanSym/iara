@@ -60,15 +60,14 @@ if prompt := st.chat_input("Digite sua mensagem..."):
     with st.chat_message("user"):
         st.write(prompt)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Aguardando resposta..."):
-            try:
-                reply = _send(st.session_state.chat_messages)
-                st.write(reply)
-                st.session_state.chat_messages.append({"role": "assistant", "content": reply})
-            except httpx.ConnectError:
-                st.error("API indisponivel. Verifique se o servidor esta rodando.")
-            except httpx.HTTPStatusError as exc:
-                st.error(f"Erro {exc.response.status_code}: {exc.response.text[:200]}")
-            except Exception as exc:
-                st.error(str(exc))
+    with st.chat_message("assistant"), st.spinner("Aguardando resposta..."):
+        try:
+            reply = _send(st.session_state.chat_messages)
+            st.write(reply)
+            st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+        except httpx.ConnectError:
+            st.error("API indisponivel. Verifique se o servidor esta rodando.")
+        except httpx.HTTPStatusError as exc:
+            st.error(f"Erro {exc.response.status_code}: {exc.response.text[:200]}")
+        except Exception as exc:
+            st.error(str(exc))

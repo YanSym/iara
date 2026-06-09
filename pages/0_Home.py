@@ -42,8 +42,8 @@ with col1:
 - PostgreSQL para idempotência, leases, outbox e auditoria
 
 **Provedores LLM**
-- OpenAI (GPT-4o, GPT-4o-mini e modelos da família 5)
-- Anthropic (Claude Sonnet e qualquer modelo Claude)
+- OpenAI
+- Anthropic
 """)
 
 with col2:

@@ -155,6 +155,37 @@ async def receive_chatwoot_webhook(
             "correlation_id": correlation_id,
         }
 
+    # Extract transient attachment URLs from the raw payload for media processing.
+    # These URLs are NOT stored in NormalizedChatwootEvent (security boundary) but
+    # are safe to carry in the ephemeral RabbitMQ job message.
+    message_raw = payload.get("message", {}) or payload
+    raw_attachments = message_raw.get("attachments") or payload.get("attachments") or []
+    attachment_jobs: list[dict] = []
+    for i, att in enumerate(raw_attachments):
+        if not isinstance(att, dict):
+            continue
+        url = att.get("data_url") or att.get("url") or att.get("thumb_url")
+        if not url:
+            continue
+        import hashlib as _hl
+
+        file_key = att.get("file_key") or att.get("id", f"att_{i}")
+        ref = _hl.sha256(str(file_key).encode()).hexdigest()[:24]
+        attachment_jobs.append(
+            {
+                "ref": ref,
+                "url": url,
+                "content_type": att.get("content_type") or "application/octet-stream",
+                "type": att.get("file_type", "file"),
+            }
+        )
+
+    # Extract sender identity for admin command authorization.
+    # sender_type: "contact", "agent", or "agent_bot" (Chatwoot sender types)
+    sender_raw = message_raw.get("sender") or payload.get("sender") or {}
+    sender_type = str(sender_raw.get("type", "contact"))
+    sender_ref = str(sender_raw.get("id", ""))
+
     # Queue processing job (background task for fast 200 response)
     rabbitmq_conn = getattr(request.app.state, "rabbitmq", None)
     background_tasks.add_task(
@@ -165,6 +196,9 @@ async def receive_chatwoot_webhook(
         idempotency_key=normalized.idempotency_key,
         raw_hash=normalized.raw_event_ref.raw_hash,
         content=normalized.content_text,
+        attachments=attachment_jobs,
+        sender_type=sender_type,
+        sender_ref=sender_ref,
         rabbitmq_connection=rabbitmq_conn,
     )
 
@@ -188,6 +222,9 @@ async def _queue_processing_job(
     idempotency_key: str,
     raw_hash: str,
     content: str | None = None,
+    attachments: list[dict] | None = None,
+    sender_type: str = "contact",
+    sender_ref: str = "",
     rabbitmq_connection: object | None = None,
 ) -> None:
     """Queue a conversation processing job to RabbitMQ.
@@ -224,6 +261,9 @@ async def _queue_processing_job(
             idempotency_key=idempotency_key,
             event_ref=raw_hash,
             content=content,
+            attachments=attachments or [],
+            sender_type=sender_type,
+            sender_ref=sender_ref,
         )
         await publisher.publish_conversation_job(job)
         await channel.close()

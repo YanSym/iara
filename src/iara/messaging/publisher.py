@@ -39,6 +39,9 @@ class ConversationJob:
         idempotency_key: str,
         event_ref: str,
         content: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        sender_type: str = "contact",
+        sender_ref: str = "",
     ) -> None:
         self.tenant_id = tenant_id
         self.conversation_id = conversation_id
@@ -46,6 +49,11 @@ class ConversationJob:
         self.idempotency_key = idempotency_key
         self.event_ref = event_ref
         self.content = content
+        # Attachment dicts: [{ref, url, content_type, type}]
+        # URLs are transient (not persisted to DB) — safe in RabbitMQ messages.
+        self.attachments: list[dict[str, Any]] = attachments or []
+        self.sender_type = sender_type
+        self.sender_ref = sender_ref
         self.scheduled_at = datetime.now(UTC).isoformat()
 
     def to_dict(self) -> dict[str, Any]:
@@ -61,6 +69,9 @@ class ConversationJob:
             "idempotency_key": self.idempotency_key,
             "event_ref": self.event_ref,
             "content": self.content,
+            "attachments": self.attachments,
+            "sender_type": self.sender_type,
+            "sender_ref": self.sender_ref,
             "scheduled_at": self.scheduled_at,
         }
 

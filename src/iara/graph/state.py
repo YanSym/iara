@@ -44,5 +44,8 @@ class GraphState(TypedDict, total=False):
     # Message history — accumulates across nodes with list concatenation
     messages: Annotated[list[dict[str, Any]], operator.add]
 
+    # Routing flags set by eligibility
+    is_admin_command: bool
+
     # Non-sensitive run metadata
     metadata: dict[str, Any]

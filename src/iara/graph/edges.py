@@ -12,6 +12,9 @@ from typing import Any
 def should_continue_after_eligibility(state: dict[str, Any]) -> str:
     """Route after eligibility check.
 
+    Routes admin commands to the command_assistant node; all other accepted
+    events proceed to media_understanding.
+
     Args:
         state: Current graph state.
 
@@ -20,6 +23,8 @@ def should_continue_after_eligibility(state: dict[str, Any]) -> str:
     """
     if state.get("eligibility_status") != "accepted":
         return "end"
+    if state.get("is_admin_command"):
+        return "command_assistant"
     return "media_understanding"
 
 
@@ -104,10 +109,17 @@ def should_continue_after_guardrails(state: dict[str, Any]) -> str:
 def should_continue_after_dispatch(state: dict[str, Any]) -> str:
     """Route after command dispatch.
 
+    Routes to memory_writer on success. The memory_writer_node is a no-op
+    when the memory store is disabled, so routing unconditionally on success
+    is safe and avoids threading a 'memory_enabled' flag through state.
+    On error, terminates immediately to prevent cascading into memory_writer.
+
     Args:
         state: Current graph state.
 
     Returns:
-        str: End.
+        str: 'memory_writer' on success, 'end' on error.
     """
-    return "end"
+    if state.get("error"):
+        return "end"
+    return "memory_writer"

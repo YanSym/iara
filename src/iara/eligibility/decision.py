@@ -75,35 +75,44 @@ class EligibilityChecker:
                 "account binding mismatch",
             )
 
-        # 2. Outgoing message check
+        # 2. Non-message events — must carry a message_type to be processable.
+        # Events like conversation_created or conversation_status_changed arrive
+        # with message_type=None; the agent graph expects a real user message.
+        if event.message_type is None:
+            return EligibilityDecision.reject(
+                EligibilityReason.UNSUPPORTED_EVENT_TYPE,
+                "event has no message_type — not a processable message event",
+            )
+
+        # 3. Outgoing message check
         if event.message_type == MessageType.OUTGOING:
             return EligibilityDecision.reject(
                 EligibilityReason.OUTGOING_MESSAGE,
                 "outgoing messages do not trigger agent",
             )
 
-        # 3. Activity / template message
+        # 4. Activity / template message
         if event.message_type in (MessageType.ACTIVITY, MessageType.TEMPLATE):
             return EligibilityDecision.reject(
                 EligibilityReason.UNSUPPORTED_EVENT_TYPE,
                 f"message_type={event.message_type} is not eligible",
             )
 
-        # 4. Bot / system sender
+        # 5. Bot / system sender
         if event.sender_type in (SenderType.AGENT_BOT, SenderType.SYSTEM):
             return EligibilityDecision.reject(
                 EligibilityReason.BOT_SENDER,
                 f"sender_type={event.sender_type} is not eligible",
             )
 
-        # 5. Private note — never processed by agent
+        # 6. Private note — never processed by agent
         if event.is_private:
             return EligibilityDecision.reject(
                 EligibilityReason.PRIVATE_NOTE,
                 "private notes are excluded from agent processing",
             )
 
-        # 6. Idempotency / duplicate check
+        # 7. Idempotency / duplicate check
         if self._idempotency_checker is not None:
             is_duplicate = await self._idempotency_checker.is_duplicate(event.idempotency_key)
             if is_duplicate:
@@ -112,7 +121,7 @@ class EligibilityChecker:
                     "idempotency key already seen",
                 )
 
-        # 7. Debounce check
+        # 8. Debounce check
         if self._debounce_checker is not None:
             is_debouncing = await self._debounce_checker.is_debouncing(
                 tenant_id=str(self._tenant.tenant_id),

@@ -8,7 +8,7 @@ This ensures effectively-once execution even under retries and checkpointing.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
@@ -92,6 +92,8 @@ class OutboxRepository:
         """Fetch pending commands across all tenants ordered by scheduled_at.
 
         Used by the outbox drainer worker which processes commands globally.
+        Only returns commands whose scheduled_at is in the past, so that
+        retry backoff delays are respected.
 
         Args:
             limit: Maximum number of commands to fetch.
@@ -99,9 +101,13 @@ class OutboxRepository:
         Returns:
             list[ProviderCommandOutbox]: Pending outbox records across all tenants.
         """
+        now = datetime.now(UTC)
         stmt = (
             select(ProviderCommandOutbox)
-            .where(ProviderCommandOutbox.status == "pending")
+            .where(
+                ProviderCommandOutbox.status == "pending",
+                ProviderCommandOutbox.scheduled_at <= now,
+            )
             .order_by(ProviderCommandOutbox.scheduled_at)
             .limit(limit)
         )
@@ -164,6 +170,32 @@ class OutboxRepository:
                 .where(ProviderCommandOutbox.command_id == command_id)
                 .values(**values)
             )
+        await self._session.execute(stmt)
+
+    async def mark_failed_for_retry(
+        self,
+        command_id: str,
+        retry_delay_seconds: int = 30,
+    ) -> None:
+        """Increment retry count and reschedule a failed command for a future attempt.
+
+        Resets status to 'pending' with an exponential-ish delay so the drainer
+        picks it up again after the backoff window, rather than abandoning it.
+
+        Args:
+            command_id: The command ID.
+            retry_delay_seconds: Seconds to wait before the next attempt.
+        """
+        next_at = datetime.now(UTC) + timedelta(seconds=retry_delay_seconds)
+        stmt = (
+            update(ProviderCommandOutbox)
+            .where(ProviderCommandOutbox.command_id == command_id)
+            .values(
+                status="pending",
+                retry_count=ProviderCommandOutbox.retry_count + 1,
+                scheduled_at=next_at,
+            )
+        )
         await self._session.execute(stmt)
 
     async def mark_dead_lettered(self, command_id: str, reason: str | None = None) -> None:

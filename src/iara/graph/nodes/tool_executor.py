@@ -110,8 +110,24 @@ async def tool_executor_node(
         results_count=len(results),
     )
 
-    return {
+    # Append tool result messages so the agent sees them on the next iteration
+    # (multi-turn function-calling loop requires tool messages in history).
+    tool_messages = [
+        {
+            "role": "tool",
+            "tool_call_id": r.get("call_id", ""),
+            "content": r.get("result_summary", ""),
+        }
+        for r in results
+        if r.get("call_id")
+    ]
+
+    state_update: dict[str, Any] = {
         "tool_results": results,
         "tool_calls_pending": [],
         "step_count": state.get("step_count", 0) + 1,
     }
+    if tool_messages:
+        state_update["messages"] = tool_messages  # appended via operator.add reducer
+
+    return state_update

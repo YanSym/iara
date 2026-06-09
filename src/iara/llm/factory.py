@@ -21,6 +21,7 @@ A detecção é feita pelo número presente no nome do modelo:
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from iara.config.settings import LlmProvider
@@ -53,14 +54,18 @@ def _model_family(model: str) -> int:
 def _resolve_api_key(direct_key: str | None, key_ref: str) -> str | None:
     """Return the direct key when provided; otherwise resolve from secret store.
 
-    In production the secret store resolves ``secret://namespace/key`` paths.
-    The stub here returns None, which causes the SDK to fall back to the
-    standard env-var lookup (ANTHROPIC_API_KEY / OPENAI_API_KEY).
+    Handles ``secret://namespace/key`` refs by converting the path to an
+    uppercase env var (e.g. ``secret://anthropic/api_key`` → ``ANTHROPIC_API_KEY``).
+    When the env var is absent, returns None so the SDK falls back to its own
+    standard env-var lookup (``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY``).
     """
     if direct_key:
         return direct_key
-    # TODO: wire up the secret resolution layer for production
-    return None
+    if not key_ref or not key_ref.startswith("secret://"):
+        return None
+    path = key_ref[len("secret://") :]
+    env_key = path.upper().replace("/", "_").replace("-", "_")
+    return os.environ.get(env_key)
 
 
 def build_llm(settings: Settings) -> Any:

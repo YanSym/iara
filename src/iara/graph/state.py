@@ -39,6 +39,7 @@ class GraphState(TypedDict, total=False):
     response_sent: bool
     error: str | None
     hitl_requested: bool
+    hitl_approved: bool  # set by /hitl/{run_id}/approve before graph resumes
     step_count: int
 
     # Message history — accumulates across nodes with list concatenation

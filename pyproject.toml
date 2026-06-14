@@ -30,6 +30,7 @@ dependencies = [
     "pypdf>=5.0.0",
     "langgraph-checkpoint-postgres>=2.0",
     "psycopg[binary,pool]>=3.2",
+    "prometheus-client>=0.25.0",
 ]
 
 [dependency-groups]

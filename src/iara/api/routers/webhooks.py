@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
@@ -26,6 +27,10 @@ from iara.contracts.errors import (
 from iara.eligibility.decision import EligibilityChecker
 from iara.eligibility.normalizer import ChatwootEventNormalizer
 from iara.observability.logging import get_logger
+from iara.observability.metrics import (
+    webhook_request_duration_seconds,
+    webhook_requests_total,
+)
 from iara.tenancy.resolver import InMemoryTenantRepository, TenantResolver
 
 logger = get_logger(__name__)
@@ -82,17 +87,21 @@ async def receive_chatwoot_webhook(
         HTTPException: If the tenant is not found or the event is invalid.
     """
     correlation_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    _t_start = time.monotonic()
 
     # Read raw bytes (for hash only — never store)
     try:
         raw_bytes = await request.body()
     except Exception as exc:
+        webhook_requests_total.labels(status="error").inc()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to read request body",
         ) from exc
 
     if not raw_bytes:
+        webhook_requests_total.labels(status="accepted").inc()
+        webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
         return {"status": "accepted", "correlation_id": correlation_id}
 
     # Resolve tenant (fail-closed)
@@ -105,6 +114,8 @@ async def receive_chatwoot_webhook(
             correlation_id=correlation_id,
             error_code=exc.code,
         )
+        webhook_requests_total.labels(status="error").inc()
+        webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Tenant not found",
@@ -148,6 +159,8 @@ async def receive_chatwoot_webhook(
             correlation_id=correlation_id,
             reason=decision.reason,
         )
+        webhook_requests_total.labels(status="rejected").inc()
+        webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
         # Return 200 to prevent Chatwoot retries for non-eligible events
         return {
             "status": "rejected",
@@ -209,6 +222,8 @@ async def receive_chatwoot_webhook(
         event_type=normalized.event_type,
     )
 
+    webhook_requests_total.labels(status="accepted").inc()
+    webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
     return {
         "status": "accepted",
         "correlation_id": correlation_id,

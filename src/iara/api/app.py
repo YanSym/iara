@@ -9,14 +9,16 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from iara.api.routers.admin import router as admin_router
 from iara.api.routers.chat import router as chat_router
+from iara.api.routers.hitl import router as hitl_router
 from iara.api.routers.webhooks import router as webhook_router
 from iara.config.settings import get_settings
 from iara.observability.logging import configure_logging, get_logger
+from iara.observability.metrics import CONTENT_TYPE_LATEST, generate_latest
 
 logger = get_logger(__name__)
 
@@ -98,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook_router, prefix="/webhooks")
     app.include_router(chat_router, prefix="/chat")
     app.include_router(admin_router, prefix="/admin")
+    app.include_router(hitl_router, prefix="/hitl")
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -108,6 +111,16 @@ def create_app() -> FastAPI:
     async def readiness() -> dict[str, str]:
         """Readiness probe endpoint."""
         return {"status": "ready"}
+
+    @app.get("/live")
+    async def liveness() -> dict[str, str]:
+        """Liveness probe endpoint — confirms the process is alive."""
+        return {"status": "alive"}
+
+    @app.get("/metrics")
+    async def metrics() -> Response:
+        """Prometheus metrics endpoint."""
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app
 

@@ -10,9 +10,12 @@ agent node. It:
 
 from __future__ import annotations
 
+import time
+
 from iara.contracts.errors import FailClosedError, PolicyViolationError
 from iara.contracts.tools import ToolInvocationRequest, ToolInvocationResult, ToolResultStatus
 from iara.observability.logging import get_logger
+from iara.observability.metrics import tool_invocation_duration_seconds, tool_invocations_total
 from iara.tools.executor import ToolExecutor
 from iara.tools.policy_guard import ToolPolicyGuard
 from iara.tools.registry import AgentToolRegistry
@@ -52,6 +55,8 @@ class AgentToolMcpGateway:
         Returns:
             ToolInvocationResult: The sanitized invocation result.
         """
+        _t_start = time.monotonic()
+
         # 1. Registry lookup — must be active
         tool = self._registry.get_tool(request.tool_name)
         if tool is None:
@@ -60,6 +65,7 @@ class AgentToolMcpGateway:
                 tool_name=request.tool_name,
                 correlation_id=request.correlation_id,
             )
+            tool_invocations_total.labels(tool_name=request.tool_name, status="failed").inc()
             return ToolInvocationResult(
                 invocation_id=request.invocation_id,
                 tool_name=request.tool_name,
@@ -71,6 +77,9 @@ class AgentToolMcpGateway:
             )
 
         if not self._registry.is_active(request.tool_name):
+            tool_invocations_total.labels(
+                tool_name=request.tool_name, status="policy_blocked"
+            ).inc()
             return ToolInvocationResult(
                 invocation_id=request.invocation_id,
                 tool_name=request.tool_name,
@@ -90,6 +99,9 @@ class AgentToolMcpGateway:
                 correlation_id=request.correlation_id,
                 error_code=exc.code,
             )
+            tool_invocations_total.labels(
+                tool_name=request.tool_name, status="policy_blocked"
+            ).inc()
             return ToolInvocationResult(
                 invocation_id=request.invocation_id,
                 tool_name=request.tool_name,
@@ -101,6 +113,9 @@ class AgentToolMcpGateway:
             )
 
         if not policy_result.approved:
+            tool_invocations_total.labels(
+                tool_name=request.tool_name, status="policy_blocked"
+            ).inc()
             return ToolInvocationResult(
                 invocation_id=request.invocation_id,
                 tool_name=request.tool_name,
@@ -125,6 +140,15 @@ class AgentToolMcpGateway:
             tool=tool,
             policy_result=policy_result,
         )
+
+        _elapsed = time.monotonic() - _t_start
+        _metric_status = (
+            result.status.value.lower()
+            if hasattr(result.status, "value")
+            else str(result.status).lower()
+        )
+        tool_invocations_total.labels(tool_name=request.tool_name, status=_metric_status).inc()
+        tool_invocation_duration_seconds.labels(tool_name=request.tool_name).observe(_elapsed)
 
         logger.info(
             "tool_invoked",

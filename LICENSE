@@ -1,0 +1,161 @@
+LICENÇA DE SOFTWARE PROPRIETÁRIO
+
+Copyright (c) 2026 Yan Vianna Sym Tecnologia da Informação LTDA (SymCorp).
+Todos os direitos reservados.
+
+Titular: Yan Vianna Sym Tecnologia da Informação LTDA
+Nome Fantasia: SymCorp
+CNPJ: 63.359.908/0001-06
+Responsável: Yan Vianna Sym (Fundador & CEO)
+Contato: yan.symcorp@gmail.com
+
+================================================================================
+1. NATUREZA PROPRIETÁRIA E CONFIDENCIAL
+================================================================================
+
+Este software, incluindo todo o código-fonte, código objeto, documentação,
+modelos de dados, interfaces, arquiteturas, algoritmos e quaisquer materiais
+correlatos (coletivamente, o "Software"), é propriedade exclusiva e
+confidencial de Yan Vianna Sym Tecnologia da Informação LTDA ("SymCorp").
+
+O Software é licenciado, não vendido. Nenhum título de propriedade ou direito
+real sobre o Software é transferido a qualquer pessoa ou entidade pelo simples
+acesso a este repositório, pela posse, visualização ou recebimento do Software
+ou de qualquer parte dele.
+
+================================================================================
+2. AUSÊNCIA DE LICENÇA
+================================================================================
+
+NENHUM DIREITO É CONCEDIDO por este arquivo. O recebimento, a posse ou a
+visualização do Software, no todo ou em parte, NÃO confere nem implica qualquer
+direito de usar, copiar, reproduzir, modificar, adaptar, traduzir, publicar,
+distribuir, sublicenciar, vender, alugar, fazer engenharia reversa, decompilar,
+desmontar ou criar obras derivadas do Software, por qualquer meio ou forma.
+
+Qualquer uso do Software exige instrumento contratual expresso, por escrito e
+assinado por representante autorizado da SymCorp. Na ausência de tal instrumento,
+todos os direitos são reservados pela SymCorp e se aplicam as disposições do
+direito autoral vigente.
+
+================================================================================
+3. CONDUTAS EXPRESSAMENTE PROIBIDAS
+================================================================================
+
+São ESTRITAMENTE PROIBIDAS, sem autorização prévia e por escrito da SymCorp:
+
+  (a) Copiar, reproduzir ou duplicar o Software ou qualquer parte dele,
+      por qualquer meio;
+  (b) Usar o Software ou qualquer parte dele para qualquer finalidade;
+  (c) Distribuir, transferir, transmitir, hospedar ou disponibilizar o
+      Software a terceiros;
+  (d) Modificar o Software ou criar obras derivadas ou concorrentes baseadas
+      nele;
+  (e) Realizar engenharia reversa, decompilar ou tentar derivar o código-fonte,
+      a estrutura ou a organização interna do Software;
+  (f) Remover, alterar ou ocultar qualquer aviso de direitos autorais, marca
+      registrada ou aviso de propriedade contido no Software;
+  (g) Acessar o Software sem autorização ou manter acesso após revogação da
+      autorização.
+
+================================================================================
+4. TRANSFERÊNCIA DE PROPRIEDADE INTELECTUAL CONDICIONADA
+================================================================================
+
+A propriedade intelectual do Software desenvolvido pela SymCorp para qualquer
+CONTRATANTE, incluindo código-fonte, documentação técnica e demais artefatos
+entregues, transfere-se integralmente ao CONTRATANTE somente após o pagamento
+integral do valor contratado, conforme disposto no contrato de desenvolvimento
+celebrado entre as partes.
+
+Até a quitação integral:
+
+  (a) A SymCorp mantém a plena titularidade do Software, nos termos da
+      Lei nº 9.610/1998 (Lei de Direitos Autorais) e da Lei nº 9.279/1996
+      (Lei de Propriedade Industrial);
+  (b) O uso, o acesso, a cópia ou a operação do Software pelo CONTRATANTE
+      inadimplente é expressamente proibido e sujeita o infrator às penalidades
+      previstas no contrato e na legislação vigente;
+  (c) A SymCorp poderá, a seu exclusivo critério, suspender o acesso ao
+      Software e ao repositório de código a qualquer momento em caso de
+      inadimplemento, sem necessidade de decisão judicial.
+
+================================================================================
+5. PENALIDADES POR USO NÃO AUTORIZADO
+================================================================================
+
+O uso, a cópia, a distribuição, o acesso ou a exploração do Software sem a
+devida autorização da SymCorp constitui violação da Lei nº 9.610/1998 (Lei de
+Direitos Autorais), da Lei nº 9.279/1996 (Lei de Propriedade Industrial) e do
+Código Civil Brasileiro, podendo gerar responsabilidade civil e criminal.
+
+Qualquer pessoa ou entidade que use, copie, distribua, acesse ou explore o
+Software sem a autorização expressa e por escrito da SymCorp estará sujeita a:
+
+  (a) Pagamento de multa contratual de R$ 30.000,00 (trinta mil reais) por
+      evento de uso, acesso ou distribuição não autorizada identificada,
+      independentemente de perdas e danos adicionais apurados;
+  (b) Indenização por todos os danos efetivos, lucros cessantes e
+      enriquecimento ilícito decorrentes da violação;
+  (c) Reembolso dos custos de enforcement da SymCorp, incluindo honorários
+      advocatícios e custas processuais;
+  (d) Danos estatutários disponíveis na legislação aplicável;
+  (e) Medidas cautelares e tutelas de urgência para cessação imediata da
+      atividade não autorizada, reconhecendo-se a dificuldade de quantificação
+      dos danos a uma obra proprietária e confidencial.
+
+A SymCorp reserva-se o direito de perseguir todos os remédios jurídicos e
+equitativos disponíveis. Nenhuma omissão ou tolerância da SymCorp no exercício
+de qualquer direito implica renúncia a tal direito.
+
+================================================================================
+6. CONFIDENCIALIDADE E SEGREDO INDUSTRIAL
+================================================================================
+
+O Software constitui informação confidencial e segredo industrial da SymCorp.
+Qualquer pessoa ou entidade que tenha acesso ao Software compromete-se a
+manter sua confidencialidade e a não divulgá-lo a terceiros, sob pena das
+sanções previstas na Seção 5 e na legislação aplicável.
+
+As partes que tiverem acesso ao Software observarão, adicionalmente, a Lei
+nº 13.709/2018 (Lei Geral de Proteção de Dados — LGPD) no tratamento de
+quaisquer dados pessoais processados pelo Software.
+
+================================================================================
+7. ISENÇÃO DE GARANTIAS
+================================================================================
+
+O SOFTWARE É FORNECIDO "NO ESTADO EM QUE SE ENCONTRA" ("AS IS"), SEM GARANTIA
+DE QUALQUER NATUREZA, EXPRESSA OU IMPLÍCITA, INCLUINDO, SEM LIMITAÇÃO, AS
+GARANTIAS DE COMERCIALIZAÇÃO, ADEQUAÇÃO A UMA FINALIDADE ESPECÍFICA E
+NÃO VIOLAÇÃO DE DIREITOS DE TERCEIROS.
+
+================================================================================
+8. LIMITAÇÃO DE RESPONSABILIDADE
+================================================================================
+
+EM NENHUMA HIPÓTESE A SYMCORP OU SEUS REPRESENTANTES SERÃO RESPONSÁVEIS POR
+QUAISQUER DANOS DIRETOS, INDIRETOS, INCIDENTAIS, ESPECIAIS, EXEMPLARES OU
+CONSEQUENTES (INCLUINDO, MAS NÃO SE LIMITANDO A, LUCROS CESSANTES, PERDA DE
+DADOS OU INTERRUPÇÃO DE NEGÓCIOS) DECORRENTES DO USO OU DA IMPOSSIBILIDADE
+DE USO DO SOFTWARE, AINDA QUE ADVERTIDOS DA POSSIBILIDADE DE TAIS DANOS.
+
+================================================================================
+9. FORO E LEI APLICÁVEL
+================================================================================
+
+Esta Licença é regida pelas leis da República Federativa do Brasil. Qualquer
+disputa decorrente desta Licença está sujeita à jurisdição exclusiva do Foro
+da Comarca de São Paulo, Estado de São Paulo, com renúncia expressa a qualquer
+outro, por mais privilegiado que seja.
+
+================================================================================
+
+Para solicitações de licenciamento, autorizações ou parcerias, entre em contato:
+
+  Yan Vianna Sym Tecnologia da Informação LTDA (SymCorp)
+  E-mail: yan.symcorp@gmail.com
+  Tel: (11) 98299-2226
+  CNPJ: 63.359.908/0001-06
+
+Todos os direitos reservados.

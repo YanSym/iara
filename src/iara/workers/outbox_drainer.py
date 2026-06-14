@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from iara.config.settings import Settings
 from iara.contracts.provider import ProviderCommand, ProviderSecurityContext, RiskClass
 from iara.observability.logging import get_logger
+from iara.observability.metrics import outbox_commands_total
 from iara.persistence.repositories.outbox import OutboxRepository
 
 logger = get_logger(__name__)
@@ -133,6 +134,7 @@ class OutboxDrainerWorker:
                     reason="max_retries_exceeded",
                 )
                 await session.commit()
+            outbox_commands_total.labels(status="dead_lettered").inc()
             return
 
         try:
@@ -177,6 +179,7 @@ class OutboxDrainerWorker:
                 repo = OutboxRepository(session)
                 await repo.mark_sent(command_id=command_id)
                 await session.commit()
+            outbox_commands_total.labels(status="sent").inc()
 
         except Exception as exc:
             next_retry = retry_count + 1
@@ -199,6 +202,7 @@ class OutboxDrainerWorker:
                         command_id=command_id,
                         reason="max_retries_exceeded",
                     )
+                    outbox_commands_total.labels(status="dead_lettered").inc()
                 else:
                     # Back-off and reschedule for a later attempt.
                     backoff = 30 * (2**retry_count)  # 30s, 60s, 120s, …
@@ -206,4 +210,5 @@ class OutboxDrainerWorker:
                         command_id=command_id,
                         retry_delay_seconds=backoff,
                     )
+                    outbox_commands_total.labels(status="failed").inc()
                 await session.commit()

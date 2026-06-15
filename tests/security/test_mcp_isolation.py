@@ -76,8 +76,8 @@ class TestMcpRegistryIntentsAreLogical:
 
         # Sanity: resolution exists and is allowed
         assert resolution.allowed is True
-        # The resolved_tool_name is the raw MCP name — it exists internally
-        assert resolution.resolved_tool_name == "chatwoot_send_message"
+        # The resolved_tool_name is the real Chatwoot MCP tool name — internal only
+        assert resolution.resolved_tool_name == "conversation_message_send"
         # But the intent the agent used is the logical name
         assert resolution.intent == "send_message"
         assert not resolution.intent.startswith("chatwoot_")

@@ -50,12 +50,13 @@ def build_followup_command(
     return {
         "command_id": str(uuid.uuid4()),
         "provider": "chatwoot",
-        "capability_name": "send_outbound_message",
+        "capability_name": "followup_reengage_conversation",
         "tenant_id": tenant_id,
         "conversation_id": conversation_id,
         "idempotency_key": idempotency_key,
         "correlation_id": correlation_id,
         "parameters": {
+            "conversation_id": conversation_id,
             "message_ref": message_ref,
             "message_length": len(message),
             "reason_ref": hashlib.sha256(reason.encode()).hexdigest()[:16] if reason else "",

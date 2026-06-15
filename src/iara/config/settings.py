@@ -150,7 +150,14 @@ class Settings(BaseSettings):
     iara_tenant_max_cache_size: int = Field(default=1000, ge=1)
 
     # ── Chatwoot MCP ──────────────────────────────────────────────────────────
-    chatwoot_mcp_base_url: str = Field(default="http://localhost:3030")
+    # Base URL of the Chatwoot instance (no trailing slash).
+    # Full MCP endpoint is composed as: {base_url}/mcp/{account_id}/{mcp_slug}
+    chatwoot_mcp_base_url: str = Field(default="https://app.digi2b.com")
+    # Numeric Chatwoot account ID (e.g. "59" for suporte, "42" for oral-unic).
+    chatwoot_account_id: str = Field(default="", description="Chatwoot account ID (numeric string)")
+    # MCP server slug configured in the Chatwoot instance (e.g. 'mcp-suporte').
+    chatwoot_mcp_slug: str = Field(default="", description="MCP server slug (per-tenant)")
+    # Api-Access-Token for the MCP server (header: Api-Access-Token).
     chatwoot_mcp_credential_ref: str = Field(default="secret://chatwoot/mcp_token")
     chatwoot_mcp_timeout_seconds: int = Field(default=30, ge=1, le=300)
     chatwoot_mcp_max_retries: int = Field(default=3, ge=0, le=10)

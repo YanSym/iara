@@ -95,14 +95,14 @@ def build_kanban_update_command(
     return {
         "command_id": str(uuid.uuid4()),
         "provider": "chatwoot",
-        "capability_name": "update_conversation_stage",
+        "capability_name": "kanban_update_status",
         "tenant_id": tenant_id,
         "conversation_id": conversation_id,
         "idempotency_key": idempotency_key,
         "correlation_id": correlation_id,
         "parameters": {
+            "conversation_id": conversation_id,
             "stage": stage,
-            "label": f"kanban:{stage}",
         },
     }
 
@@ -140,13 +140,15 @@ def build_kanban_comment_command(
     return {
         "command_id": str(uuid.uuid4()),
         "provider": "chatwoot",
-        "capability_name": "send_private_note",
+        "capability_name": "kanban_comment",
         "tenant_id": tenant_id,
         "conversation_id": conversation_id,
         "idempotency_key": idempotency_key,
         "correlation_id": correlation_id,
         "parameters": {
+            "conversation_id": conversation_id,
             "note_ref": comment_ref,
             "content_length": len(comment),
+            "private": True,
         },
     }

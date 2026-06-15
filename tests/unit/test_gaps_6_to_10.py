@@ -403,17 +403,25 @@ class TestCredentialResolution:
 class TestChatwootMcpAdapterRetry:
     """Tests for ChatwootMcpAdapter retry behaviour."""
 
+    # MCP endpoint: {base_url}/mcp/{account_id}/{slug}
+    _BASE = "http://localhost:3030"
+    _ACCOUNT = "59"
+    _SLUG = "mcp-suporte"
+    _MCP_PATH = f"/mcp/{_ACCOUNT}/{_SLUG}"
+
     def _make_adapter(self, max_retries: int = 3) -> Any:
         registry = MagicMock(spec=ChatwootMcpRegistry)
         resolution = MagicMock()
         resolution.allowed = True
-        resolution.resolved_tool_name = "chatwoot_send_message"
+        resolution.resolved_tool_name = "conversation_message_send"
         resolution.requires_readback = False
         registry.resolve_intent.return_value = resolution
 
         return ChatwootMcpAdapter(
             registry=registry,
-            mcp_base_url="http://localhost:3030",
+            mcp_base_url=self._BASE,
+            account_id=self._ACCOUNT,
+            mcp_slug=self._SLUG,
             credential_ref="test_token",
             max_retries=max_retries,
         )
@@ -431,7 +439,7 @@ class TestChatwootMcpAdapterRetry:
             provider="chatwoot",
             account_id_ref="",
             capability_name="send_message",
-            parameters={"conversation_id": "123", "message": "hi"},
+            parameters={"conversation_id": "123", "content": "hi"},
             risk_class=RiskClass.LOW_WRITE,
             correlation_id="corr_001",
         )
@@ -444,8 +452,10 @@ class TestChatwootMcpAdapterRetry:
             risk_class=RiskClass.LOW_WRITE,
         )
 
-        with respx.mock(base_url="http://localhost:3030") as mock:
-            mock.post("/mcp/call").mock(return_value=httpx.Response(200, json={"ok": True}))
+        with respx.mock(base_url=self._BASE) as mock:
+            mock.post(self._MCP_PATH).mock(
+                return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {}})
+            )
             result = await adapter.execute_command(command, security_ctx)
 
         assert result.success is True
@@ -487,7 +497,6 @@ class TestChatwootMcpAdapterRetry:
         """Transient network errors should be retried up to max_retries."""
         adapter = self._make_adapter(max_retries=2)
 
-        # Simulate: first attempt 503, second attempt 200
         call_count = 0
 
         async def _handler(request: httpx.Request) -> httpx.Response:
@@ -495,14 +504,14 @@ class TestChatwootMcpAdapterRetry:
             call_count += 1
             if call_count < 2:
                 return httpx.Response(503, json={"error": "service unavailable"})
-            return httpx.Response(200, json={"ok": True})
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {}})
 
         with (
             patch("asyncio.sleep", return_value=None),
-            respx.mock(base_url="http://localhost:3030") as mock,
+            respx.mock(base_url=self._BASE) as mock,
         ):
-            mock.post("/mcp/call").mock(side_effect=_handler)
-            result_ref = await adapter._post_with_retry("chatwoot_send_message", {})
+            mock.post(self._MCP_PATH).mock(side_effect=_handler)
+            result_ref = await adapter._post_with_retry("conversation_message_send", {})
 
         assert result_ref  # non-empty
         assert call_count == 2  # retried once after the 503

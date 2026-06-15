@@ -120,7 +120,7 @@ class TestKanbanHandlers:
         assert result["mode"] == "suggest_only"
 
     def test_kanban_update_command_structure(self) -> None:
-        """kanban update command must include stage and label."""
+        """kanban update command must route to kanban_update_status with stage."""
         cmd = kanban.build_kanban_update_command(
             arguments={"stage": "qualified", "reason": "Budget confirmed"},
             tenant_id=str(uuid.uuid4()),
@@ -128,8 +128,9 @@ class TestKanbanHandlers:
             idempotency_key="key_k001",
             correlation_id="corr_k001",
         )
+        assert cmd["capability_name"] == "kanban_update_status"
         assert cmd["parameters"]["stage"] == "qualified"
-        assert "kanban:qualified" in cmd["parameters"]["label"]
+        assert cmd["parameters"]["conversation_id"] == "conv_k001"
 
     def test_kanban_comment_uses_opaque_ref(self) -> None:
         """kanban comment must hash the note content."""

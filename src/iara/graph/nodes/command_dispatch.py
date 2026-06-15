@@ -57,7 +57,13 @@ async def command_dispatch_node(
             tenant_id=state["tenant_id"],
             conversation_id=state["conversation_id"],
             capability_name="send_message",
-            parameters={"content": agent_response},
+            parameters={
+                "conversation_id": state["conversation_id"],
+                "content": agent_response,
+                "message_type": "outgoing",
+                "private": False,
+                "content_type": "text",
+            },
             correlation_id=correlation_id,
             idempotency_key=f"response:{run_id}",
         )

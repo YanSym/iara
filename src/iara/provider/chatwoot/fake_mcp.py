@@ -111,13 +111,19 @@ class FakeChatwootAdapter:
 
         # Apply to in-memory state
         conversation_id = command.parameters.get("conversation_id", "unknown")
-        if command.capability_name == "send_message":
+        if command.capability_name in ("send_message", "followup_reengage_conversation"):
             self._conversations[conversation_id]["messages"].append(result_ref)
-        elif command.capability_name == "add_label":
+        elif command.capability_name == "kanban_comment":
+            # Private note — treat as internal message
+            self._conversations[conversation_id]["messages"].append(result_ref)
+        elif command.capability_name == "label_conversation":
             label = command.parameters.get("label", "unknown")
             self._conversations[conversation_id]["labels"].append(
                 hashlib.sha256(label.encode()).hexdigest()[:16]
             )
+        elif command.capability_name == "kanban_update_status":
+            stage = command.parameters.get("stage", "unknown")
+            self._conversations[conversation_id]["kanban_stage"] = stage
 
         return ProviderMutationResult(
             command_id=command.command_id,

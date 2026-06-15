@@ -1,0 +1,84 @@
+# =============================================================================
+# IAra — Blocklist Global de Conteúdo Proibido
+# =============================================================================
+# Formato:
+#   - Uma entrada por linha
+#   - Linhas começando com # são comentários (ignoradas)
+#   - Linhas em branco são ignoradas
+#   - Acentos, maiúsculas e espaços extras são normalizados automaticamente
+#   - Cada entrada vira um padrão regex com fronteira de palavra (\b)
+# =============================================================================
+
+# ── Palavrões básicos ─────────────────────────────────────────────────────────
+porra
+merda
+caralho
+cacete
+bosta
+desgraça
+desgraçado
+maldito
+maldita
+fodase
+foda-se
+foda se
+vai se foder
+vai tomar no cu
+vsf
+fdp
+
+# ── Termos sexuais explícitos ─────────────────────────────────────────────────
+buceta
+boceta
+xereca
+xoxota
+piroca
+pinto
+rola
+pau
+tesão
+putaria
+sacanagem
+safadeza
+transar
+trepar
+foder
+gozar
+
+# ── Insultos e xingamentos ────────────────────────────────────────────────────
+idiota
+imbecil
+retardado
+babaca
+cuzão
+arrombado
+otário
+otaria
+corno
+corna
+vagabundo
+vagabunda
+safado
+safada
+escroto
+escrota
+lixo
+inútil
+miserável
+desgraçado
+desgraçada
+puto
+puta
+
+# ── Termos discriminatórios / ofensivos ───────────────────────────────────────
+viado
+viadinho
+sapatão
+traveco
+bicha
+filho da puta
+filha da puta
+
+# ── Ameaças e violência verbal ────────────────────────────────────────────────
+vou te matar
+te mato

@@ -1,4 +1,4 @@
-.PHONY: install format lint type test test-unit test-integration test-security check migrate run worker up down clean help
+.PHONY: install format lint type test test-unit test-integration test-security check migrate run worker up down dev clean help
 
 # ── Variables ─────────────────────────────────────────────────────────────────
 PYTHON := python3
@@ -78,6 +78,21 @@ up-all: ## Start full stack (app + worker + infra)
 
 logs: ## Tail docker compose logs
 	docker compose logs -f
+
+dev: ## Start full local dev environment: infra + migrate + API + worker
+	@echo "→ Subindo infraestrutura (postgres + rabbitmq)..."
+	docker compose up -d postgres rabbitmq
+	@echo "→ Aguardando postgres ficar saudável..."
+	@until docker compose exec -T postgres pg_isready -U iara -d iara >/dev/null 2>&1; do \
+		printf "."; sleep 1; \
+	done; echo " pronto"
+	@echo "→ Rodando migrations..."
+	$(UV) run alembic upgrade head
+	@echo "→ Iniciando worker em background (logs: make logs)..."
+	$(UV) run python -m iara.workers.main &
+	@echo "→ Iniciando API (http://localhost:8000 | docs: http://localhost:8000/docs)"
+	@echo "   Pressione Ctrl+C para encerrar. O worker continua rodando; use 'make down' para parar tudo."
+	$(UV) run uvicorn iara.api.app:app --reload --host 0.0.0.0 --port 8000
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 clean: ## Remove .pyc, __pycache__, .mypy_cache, .pytest_cache, .coverage

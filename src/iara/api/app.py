@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from iara.api.routers.admin import router as admin_router
 from iara.api.routers.chat import router as chat_router
+from iara.api.routers.config import router as config_router
 from iara.api.routers.hitl import router as hitl_router
 from iara.api.routers.webhooks import router as webhook_router
 from iara.config.settings import get_settings
@@ -101,6 +102,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/chat")
     app.include_router(admin_router, prefix="/admin")
     app.include_router(hitl_router, prefix="/hitl")
+    app.include_router(config_router, prefix="/config")
 
     @app.get("/health")
     async def health() -> dict[str, str]:

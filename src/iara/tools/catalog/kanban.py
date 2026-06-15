@@ -9,12 +9,13 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from iara.config_publishing.registry import get_kanban_stages
 from iara.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Ordered Kanban stages for the default pipeline
-KANBAN_STAGES = [
+# Fallback for code paths that don't have a tenant_id (e.g. static validation)
+_DEFAULT_KANBAN_STAGES = [
     "new_lead",
     "contacted",
     "nurturing",
@@ -76,11 +77,12 @@ def build_kanban_update_command(
     stage = arguments.get("stage", "")
     reason = arguments.get("reason", "")
 
-    if stage not in KANBAN_STAGES:
+    valid_stages = get_kanban_stages(tenant_id)
+    if stage not in valid_stages:
         logger.warning(
             "kanban_unknown_stage",
             stage=stage,
-            valid_stages=KANBAN_STAGES,
+            valid_stages=valid_stages,
         )
 
     logger.info(

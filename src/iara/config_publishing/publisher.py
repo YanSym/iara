@@ -142,6 +142,7 @@ class PublishService:
             "tenant_id": self._tenant_id,
             "version_tag": draft.version_tag,
             "config_hash": draft.config_hash,
+            "config_data": draft.config_data,
             "published_by": published_by,
             "published_at": datetime.now(UTC).isoformat(),
             "is_active": True,

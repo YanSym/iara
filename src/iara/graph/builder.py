@@ -9,7 +9,8 @@ Graph structure:
                         ↓ (tool calls)
                         → tool_executor → agent (loop)
                         ↓ (done)
-                        → guardrails → command_dispatch → (memory_enabled?) → memory_writer → END
+                        → guardrails → (hitl?) → hitl → END
+                                     → command_dispatch → (memory_enabled?) → memory_writer → END
                                                                              → END
 """
 
@@ -36,6 +37,7 @@ from iara.graph.nodes.command_dispatch import command_dispatch_node
 from iara.graph.nodes.context_builder import context_builder_node
 from iara.graph.nodes.eligibility import build_eligibility_node
 from iara.graph.nodes.guardrails import guardrails_node
+from iara.graph.nodes.hitl import build_hitl_node
 from iara.graph.nodes.memory_writer import build_memory_writer_node
 from iara.graph.nodes.tool_executor import tool_executor_node
 from iara.graph.state import GraphState
@@ -57,6 +59,7 @@ def build_conversational_graph(
     memory_store: Any = None,
     auth_guard: Any = None,
     checkpointer: Any = None,
+    session_factory: Any = None,
 ) -> Any:
     """Build and compile the IAra conversational agent graph.
 
@@ -70,6 +73,7 @@ def build_conversational_graph(
         memory_store: PostgresMemoryStore (optional; skips memory if None).
         auth_guard: CommandAuthorizationGuard (optional; disables admin routing if None).
         checkpointer: LangGraph checkpointer (optional; uses in-memory if None).
+        session_factory: Async SQLAlchemy session factory for HITL hold persistence.
 
     Returns:
         CompiledGraph: The compiled LangGraph graph.
@@ -90,6 +94,7 @@ def build_conversational_graph(
     dispatch_fn = partial(command_dispatch_node, outbox_service=outbox_service)
     media_fn = partial(_media_understanding_node, media_subgraph=media_subgraph)
     memory_fn = build_memory_writer_node(memory_store=memory_store, llm=llm)
+    hitl_fn = build_hitl_node(session_factory=session_factory)
 
     workflow = StateGraph(GraphState)
 
@@ -100,6 +105,7 @@ def build_conversational_graph(
     workflow.add_node("agent", agent_fn)
     workflow.add_node("tool_executor", tool_fn)
     workflow.add_node("guardrails", guardrails_node)  # type: ignore[type-var]
+    workflow.add_node("hitl", hitl_fn)  # type: ignore[type-var]
     workflow.add_node("command_dispatch", dispatch_fn)
     workflow.add_node("memory_writer", memory_fn)  # type: ignore[type-var]
 
@@ -143,8 +149,9 @@ def build_conversational_graph(
     workflow.add_conditional_edges(
         "guardrails",
         should_continue_after_guardrails,
-        {"command_dispatch": "command_dispatch", "end": END},
+        {"hitl": "hitl", "command_dispatch": "command_dispatch", "end": END},
     )
+    workflow.add_edge("hitl", END)
     workflow.add_conditional_edges(
         "command_dispatch",
         should_continue_after_dispatch,
@@ -277,6 +284,7 @@ def build_production_graph(settings: Settings, checkpointer: Any = None) -> Any:
         memory_store=memory_store,
         auth_guard=auth_guard,
         checkpointer=checkpointer,
+        session_factory=session_factory,
     )
 
 

@@ -3,15 +3,19 @@
 ## Core Tables
 
 ```
-tenant_agent_configs (1)
+tenants (1)
       │
+      ├─▶ provider_accounts (N)        — provider/account bindings per tenant
       ├─▶ event_receipts (N)           — idempotency per tenant
       ├─▶ conversation_debounce (N)    — debounce per tenant+conversation
       ├─▶ conversation_run_leases (N)  — fencing per tenant+conversation
       ├─▶ provider_command_outbox (N)  — outbound commands per tenant
+      ├─▶ follow_up_queue (N)          — scheduled follow-up messages per tenant
+      ├─▶ hitl_holds (N)               — HITL pause records per tenant
+      ├─▶ agent_config_versions (N)    — config drafts per tenant
+      ├─▶ config_publications (N)      — published config snapshots per tenant
       ├─▶ runtime_run_steps (N)        — audit of graph executions
-      ├─▶ tenant_kb_entries (N)        — KB entries per tenant
-      └─▶ audit_events (N)             — sanitized audit trail
+      └─▶ safe_audit_events (N)        — sanitized audit trail
 ```
 
 ## Table Definitions (abbreviated)
@@ -106,6 +110,50 @@ evidence_json     JSONB NOT NULL              -- counts/hashes only, no PII
 created_at        TIMESTAMPTZ NOT NULL
 ```
 
+### `hitl_holds`
+```sql
+id                UUID PRIMARY KEY
+run_id            TEXT(128) UNIQUE NOT NULL        -- LangGraph run identifier
+tenant_id         UUID NOT NULL REFERENCES tenants(id)
+conversation_id   TEXT(256) NOT NULL
+thread_id         TEXT(256) NOT NULL               -- LangGraph checkpointer key
+reason            TEXT                             -- sanitized hold reason
+status            TEXT(32) NOT NULL DEFAULT 'pending'
+                  -- 'pending' | 'approved' | 'rejected'
+resolved_by       TEXT(256)                        -- opaque approver reference
+context_snapshot  JSONB                            -- non-sensitive graph snapshot
+requested_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+resolved_at       TIMESTAMPTZ
+INDEX ix_hitl_holds_tenant_status (tenant_id, status)
+INDEX ix_hitl_holds_run_id_idx (run_id)
+```
+
+### `follow_up_queue`
+```sql
+id                UUID PRIMARY KEY
+tenant_id         UUID NOT NULL REFERENCES tenants(id)
+conversation_id   TEXT(256) NOT NULL
+contact_ref       TEXT(256) NOT NULL               -- SHA-256 hash of contact id
+message_ref       TEXT(256) NOT NULL               -- SHA-256 hash of message text
+message_length    INTEGER NOT NULL                 -- character count (no raw text)
+reason_ref        TEXT(256) NOT NULL               -- SHA-256 hash of reason
+trigger_at        TIMESTAMPTZ NOT NULL             -- when to send
+status            TEXT(32) NOT NULL DEFAULT 'pending'
+                  -- 'pending' | 'sent' | 'skipped' | 'failed'
+attempt_count     INTEGER NOT NULL DEFAULT 0
+max_attempts      INTEGER NOT NULL DEFAULT 3
+opted_out         BOOLEAN NOT NULL DEFAULT FALSE
+correlation_id    TEXT(128) NOT NULL
+idempotency_key   TEXT(512) NOT NULL
+created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+sent_at           TIMESTAMPTZ
+skip_reason       TEXT(256)                        -- reason code for skipped/failed
+UNIQUE uq_follow_up_idempotency (idempotency_key)
+INDEX ix_follow_up_trigger (trigger_at) WHERE status='pending'
+INDEX ix_follow_up_tenant_status (tenant_id, status)
+```
+
 ## Invariants Enforced at Schema Level
 
 | Invariant | Mechanism |
@@ -113,5 +161,8 @@ created_at        TIMESTAMPTZ NOT NULL
 | No duplicate events per tenant | `UNIQUE (tenant_id, idempotency_key)` on `event_receipts` |
 | One active run per conversation | `UNIQUE (tenant_id, conversation_id)` on `conversation_run_leases` |
 | Outbox idempotency | `UNIQUE (idempotency_key)` on `provider_command_outbox` |
-| No raw PII in KB | `title_ref` / `content_ref` fields store hashes, not content |
+| Follow-up idempotency | `UNIQUE uq_follow_up_idempotency (idempotency_key)` on `follow_up_queue` |
+| HITL run uniqueness | `UNIQUE (run_id)` on `hitl_holds` — one hold per LangGraph run |
+| No raw PII in follow-ups | `message_ref`, `contact_ref`, `reason_ref` store SHA-256 hashes only |
+| No raw PII in HITL holds | `context_snapshot` constrained by application to non-sensitive fields only |
 | No raw PII in audit | `evidence_json` constrained by application to counts/hashes only |

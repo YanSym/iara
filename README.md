@@ -161,6 +161,24 @@ O LLM **nunca vê** os nomes brutos das ferramentas MCP do Chatwoot:
 | `IARA_KANBAN_DEFAULT_MODE` | `suggest_only` | `suggest_only`, `write_sandbox`, `write_confirmed` |
 | `IARA_CAMPAIGN_DEFAULT_MODE` | `draft_only` | `draft_only`, `dry_run`, `sandbox`, `approved_send` |
 
+## Componentes Principais
+
+| Componente | Descrição |
+|------------|-----------|
+| **IAra API** (FastAPI) | Webhook receiver, HITL router (`/hitl/*`), config router (`/config/*`), metrics (`/metrics`) |
+| **LangGraph Graph** | eligibility → media_understanding → context_builder → agent → tool_executor → guardrails → hitl → command_dispatch → memory_writer |
+| **JobConsumerWorker** | Consome jobs do RabbitMQ e executa o grafo LangGraph |
+| **OutboxDrainerWorker** | Drena `provider_command_outbox` → ChatwootMcpAdapter → readback |
+| **FollowUpSchedulerWorker** | Polls `follow_up_queue` (trigger_at ≤ now) → promove para outbox |
+| **ChatwootMcpAdapter** | HTTP JSON-RPC 2.0, `Api-Access-Token`, retry, `POST {base_url}/mcp/{account_id}/{slug}` |
+| **GoogleCalendarWriteAdapter** | Integração Google Calendar (opcional) |
+| **ClinicorpWriteAdapter** | Integração Clinicorp (opcional) |
+| **NullSchedulingWriteAdapter** | Adapter no-op quando agendamento está desabilitado |
+| **PostgresTenantRepository** | Resolve tenant por chave; cache TTL |
+| **HitlHoldRepository** | Registra / aprova / rejeita holds HITL no Postgres |
+| **FollowUpRepository** | Enfileira, fetch_due, marca sent/skipped/failed |
+| **PublishService** | Pipeline async draft→publish→rollback de configuração |
+
 ## Estrutura do Projeto
 
 ```
@@ -170,20 +188,27 @@ src/iara/
 ├── config_publishing/      # Pipeline draft→publish de configuração de tenant
 ├── contracts/              # Modelos de domínio Pydantic v2
 ├── eligibility/            # Normalizador + verificador de eligibilidade (7 regras)
-├── graph/                  # Orquestração LangGraph (7 nós + edges condicionais)
+├── graph/                  # Orquestração LangGraph (nós + edges condicionais)
 ├── llm/                    # factory.py — Anthropic ou OpenAI
 ├── media/                  # Subgrafo de compreensão de mídia (áudio, imagem, doc)
 ├── memory/                 # Store de memória de conversa
 ├── messaging/              # Topologia RabbitMQ, publisher, consumer
 ├── observability/          # structlog + Prometheus metrics
 ├── persistence/            # ORM assíncrono SQLAlchemy 2.0 + repositórios + outbox
+│   ├── models.py           # Todos os modelos ORM (incluindo hitl_holds, follow_up_queue)
+│   ├── repositories/
+│   │   ├── follow_up.py    # FollowUpRepository
+│   │   ├── hitl_holds.py   # HitlHoldRepository
+│   │   └── outbox.py       # OutboxRepository
+│   └── seeds/
+│       └── seed_pilot.py   # Bootstrap do tenant piloto
 ├── provider/               # ProviderAdapter protocol + ChatwootMcpAdapter (JSON-RPC)
 │   └── chatwoot/
 │       ├── mcp_adapter.py  # HTTP JSON-RPC, Api-Access-Token, retry, readback
-│       ├── mcp_registry.py # Mapa intent→MCP tool (134 intents registrados)
+│       ├── mcp_registry.py # Mapa intent→MCP tool
 │       └── fake_mcp.py     # Stub in-memory para testes
 ├── security/               # redact_dict(), ContentFilter (blocklist PT-BR), guards
-├── tenancy/                # TenantResolver com cache TTL
+├── tenancy/                # TenantResolver + PostgresTenantRepository (cache TTL)
 ├── tools/                  # 21 ferramentas de agente
 │   ├── registry.py         # AgentToolRegistry
 │   ├── gateway.py          # AgentToolMcpGateway + métricas Prometheus
@@ -191,11 +216,42 @@ src/iara/
 │   ├── executor.py         # Roteamento leitura / rascunho / outbox
 │   └── catalog/            # kanban, qualificação, campanhas, follow-up, kb, voz, lead, histórico
 └── workers/
-    ├── job_consumer.py     # Consumer RabbitMQ → runner LangGraph
-    └── outbox_drainer.py   # Outbox Postgres → ChatwootMcpAdapter → readback
+    ├── job_consumer.py           # Consumer RabbitMQ → runner LangGraph
+    ├── outbox_drainer.py         # Outbox Postgres → ChatwootMcpAdapter → readback
+    └── follow_up_scheduler.py   # Scheduler de follow-ups (polls follow_up_queue)
 ```
 
 ## Arquitetura
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         IAra Runtime                             │
+│                                                                  │
+│  Webhook  ──► EligibilityChecker ──► RabbitMQ ──► JobConsumer  │
+│  (FastAPI)                                         (LangGraph)  │
+│                                                        │         │
+│           ┌───────────────────────────────────────────┘         │
+│           ▼                                                      │
+│    ┌─────────────────────────────────────┐                      │
+│    │         LangGraph Graph              │                      │
+│    │  eligibility → agent → guardrails   │                      │
+│    │  → hitl_node → command_dispatch     │                      │
+│    └─────────────────────────────────────┘                      │
+│           │                                                      │
+│           ▼ (outbox writes)                                     │
+│    ┌──────────────┐   ┌──────────────────────┐                 │
+│    │OutboxDrainer │   │FollowUpScheduler     │                 │
+│    │  chatwoot    │   │ (polls follow_up_queue│                 │
+│    │  gcal        │   │  → promotes to outbox)│                 │
+│    │  clinicorp   │   └──────────────────────┘                 │
+│    └──────────────┘                                             │
+│           │                                                      │
+│           ▼ (Chatwoot MCP HTTP JSON-RPC 2.0)                   │
+│    ┌──────────────────────────────────┐                         │
+│    │  Chatwoot / GCal / Clinicorp     │                         │
+│    └──────────────────────────────────┘                         │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ```
 [Chatwoot] -- webhook --> [POST /webhooks/{tenant_key}]
@@ -214,14 +270,14 @@ src/iara/
                         eligibility → media_understanding
                         → context_builder → agent
                         agent ↔ tool_executor (loop)
-                        → guardrails → command_dispatch
+                        → guardrails → hitl_node → command_dispatch
                                 │
                       [Postgres: provider_command_outbox]
                                 │
-                      [Worker: OutboxDrainerWorker]
-                                │
+                      [Worker: OutboxDrainerWorker]      [Worker: FollowUpSchedulerWorker]
+                                │                          polls follow_up_queue → outbox
                       [ChatwootMcpAdapter]
-                        POST {base}/mcp/{account_id}/{slug}
+                        POST {base_url}/mcp/{account_id}/{slug}
                         Api-Access-Token: <token>
                         JSON-RPC 2.0 — method "tools/call"
                                 │

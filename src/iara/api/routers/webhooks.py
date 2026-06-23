@@ -8,22 +8,22 @@ Per the architecture:
 2. Raw payload referenced by hash only — never stored.
 3. Pydantic normalizes to NormalizedChatwootEvent.
 4. EligibilityDecision gates the event.
-5. Idempotency and debounce registered in Postgres.
+5. Idempotency and debounce registered in Postgres (when DB available).
 6. Wakeup/job sent to RabbitMQ.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
-from iara.contracts.errors import (
-    FailClosedError,
-)
+from iara.contracts.errors import FailClosedError
 from iara.eligibility.decision import EligibilityChecker
 from iara.eligibility.normalizer import ChatwootEventNormalizer
 from iara.observability.logging import get_logger
@@ -39,10 +39,9 @@ router = APIRouter(tags=["webhooks"])
 
 # Development/test resolver (replaced by DB-backed resolver in production)
 _test_repository = InMemoryTenantRepository()
-_resolver = TenantResolver(repository=_test_repository, cache_ttl_seconds=60)
+_dev_resolver = TenantResolver(repository=_test_repository, cache_ttl_seconds=60)
 
 # Pre-register a dev tenant so local testing works without a real DB.
-# Values match the test conftest and UI defaults; override via env vars.
 if os.getenv("IARA_ENV", "development") in ("development", "sandbox"):
     _test_repository.register(
         os.getenv("IARA_DEV_TENANT_KEY", "test_tenant_001"),
@@ -54,6 +53,42 @@ if os.getenv("IARA_ENV", "development") in ("development", "sandbox"):
             "provider_account_id": os.getenv("IARA_DEV_ACCOUNT_ID", "11111"),
         },
     )
+
+
+# ── Eligibility adapter helpers ───────────────────────────────────────────────
+
+
+class _IdempotencyCheckerAdapter:
+    """Bridges EligibilityChecker's protocol to IdempotencyRepository.
+
+    Captures tenant_id and session at construction time so the EligibilityChecker
+    can call is_duplicate(key) without knowing the repository signature.
+    """
+
+    def __init__(self, repo: Any, tenant_id_uuid: Any) -> None:
+        self._repo = repo
+        self._tenant_id = tenant_id_uuid
+
+    async def is_duplicate(self, idempotency_key: str) -> bool:
+        """Return True if this event was already processed."""
+        return await self._repo.is_duplicate(self._tenant_id, idempotency_key)
+
+
+class _DebounceCheckerAdapter:
+    """Bridges EligibilityChecker's protocol to DebounceRepository."""
+
+    def __init__(self, repo: Any, tenant_id_uuid: Any) -> None:
+        self._repo = repo
+        self._tenant_id = tenant_id_uuid
+
+    async def is_debouncing(self, tenant_id: str, conversation_id: str) -> bool:
+        """Return True if the conversation is in the debounce window."""
+        return await self._repo.is_debouncing(self._tenant_id, conversation_id)
+
+
+async def _get_db_session(request: Request) -> Any:
+    """Return a DB session factory from app.state, or None if not available."""
+    return getattr(request.app.state, "db_session_factory", None)
 
 
 @router.post(
@@ -70,10 +105,11 @@ async def receive_chatwoot_webhook(
 
     This endpoint:
     1. Reads the raw body bytes.
-    2. Resolves the tenant from the URL key.
+    2. Resolves the tenant (Postgres-backed in staging/production, in-memory in dev).
     3. Normalizes the event via Pydantic.
-    4. Checks eligibility.
-    5. Queues a processing job.
+    4. Checks eligibility including idempotency and debounce.
+    5. Records accepted event and sets debounce window.
+    6. Queues a processing job.
 
     Args:
         tenant_key: The tenant key from the URL path.
@@ -89,7 +125,6 @@ async def receive_chatwoot_webhook(
     correlation_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     _t_start = time.monotonic()
 
-    # Read raw bytes (for hash only — never store)
     try:
         raw_bytes = await request.body()
     except Exception as exc:
@@ -104,22 +139,48 @@ async def receive_chatwoot_webhook(
         webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
         return {"status": "accepted", "correlation_id": correlation_id}
 
-    # Resolve tenant (fail-closed)
-    try:
-        tenant_ctx = await _resolver.resolve(tenant_key)
-    except FailClosedError as exc:
-        logger.warning(
-            "webhook_tenant_resolution_failed",
-            tenant_key_prefix=tenant_key[:8] if tenant_key else "empty",
-            correlation_id=correlation_id,
-            error_code=exc.code,
-        )
-        webhook_requests_total.labels(status="error").inc()
-        webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Tenant not found",
-        ) from exc
+    # --- Tenant resolution ---
+    # Use Postgres-backed resolver in staging/production; in-memory in dev/test.
+    iara_env = os.getenv("IARA_ENV", "development")
+    session_factory = getattr(request.app.state, "db_session_factory", None)
+
+    if iara_env not in ("development", "sandbox") and session_factory is not None:
+        from iara.tenancy.postgres_repository import PostgresTenantRepository
+
+        async with session_factory() as db_session:
+            pg_repo = PostgresTenantRepository(db_session)
+            pg_resolver = TenantResolver(repository=pg_repo, cache_ttl_seconds=60)
+            try:
+                tenant_ctx = await pg_resolver.resolve(tenant_key)
+            except FailClosedError as exc:
+                logger.warning(
+                    "webhook_tenant_resolution_failed",
+                    tenant_key_prefix=tenant_key[:8] if tenant_key else "empty",
+                    correlation_id=correlation_id,
+                    error_code=exc.code,
+                )
+                webhook_requests_total.labels(status="error").inc()
+                webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Tenant not found",
+                ) from exc
+    else:
+        try:
+            tenant_ctx = await _dev_resolver.resolve(tenant_key)
+        except FailClosedError as exc:
+            logger.warning(
+                "webhook_tenant_resolution_failed",
+                tenant_key_prefix=tenant_key[:8] if tenant_key else "empty",
+                correlation_id=correlation_id,
+                error_code=exc.code,
+            )
+            webhook_requests_total.labels(status="error").inc()
+            webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Tenant not found",
+            ) from exc
 
     # Parse payload
     try:
@@ -149,9 +210,63 @@ async def receive_chatwoot_webhook(
             detail="Event normalization failed",
         ) from exc
 
-    # Eligibility check
-    checker = EligibilityChecker(tenant_context=tenant_ctx)
-    decision = await checker.check(normalized)
+    # --- Eligibility check with optional DB-backed idempotency + debounce ---
+    idempotency_checker = None
+    debounce_checker = None
+
+    if session_factory is not None:
+        try:
+
+            from iara.config.settings import get_settings
+            from iara.persistence.repositories.debounce import DebounceRepository
+            from iara.persistence.repositories.idempotency import IdempotencyRepository
+
+            settings = get_settings()
+            tenant_uuid = tenant_ctx.tenant_id
+            # Create a transient session for the eligibility check.
+            # Both repos share the same session to avoid opening two connections.
+            _check_session = session_factory()
+            async with _check_session as _sess:
+                idempotency_repo = IdempotencyRepository(_sess)
+                debounce_repo = DebounceRepository(
+                    _sess, debounce_seconds=settings.iara_debounce_seconds
+                )
+                idempotency_checker = _IdempotencyCheckerAdapter(idempotency_repo, tenant_uuid)
+                debounce_checker = _DebounceCheckerAdapter(debounce_repo, tenant_uuid)
+
+                checker = EligibilityChecker(
+                    tenant_context=tenant_ctx,
+                    idempotency_checker=idempotency_checker,
+                    debounce_checker=debounce_checker,
+                )
+                decision = await checker.check(normalized)
+
+                if decision.eligible:
+                    # Record accepted event and set debounce window
+                    await idempotency_repo.record(
+                        tenant_id=tenant_uuid,
+                        idempotency_key=normalized.idempotency_key,
+                        raw_hash=normalized.raw_event_ref.raw_hash,
+                        correlation_id=correlation_id,
+                    )
+                    await debounce_repo.set_debounce(
+                        tenant_id=tenant_uuid,
+                        conversation_id=normalized.conversation_id,
+                    )
+                    await _sess.commit()
+        except Exception as exc:
+            # DB failure must not block webhook processing — degrade gracefully
+            logger.warning(
+                "webhook_eligibility_db_failed_degrading",
+                error_code=type(exc).__name__,
+                error_summary=str(exc)[:200],
+                correlation_id=correlation_id,
+            )
+            checker = EligibilityChecker(tenant_context=tenant_ctx)
+            decision = await checker.check(normalized)
+    else:
+        checker = EligibilityChecker(tenant_context=tenant_ctx)
+        decision = await checker.check(normalized)
 
     if not decision.eligible:
         logger.info(
@@ -161,7 +276,6 @@ async def receive_chatwoot_webhook(
         )
         webhook_requests_total.labels(status="rejected").inc()
         webhook_request_duration_seconds.observe(time.monotonic() - _t_start)
-        # Return 200 to prevent Chatwoot retries for non-eligible events
         return {
             "status": "rejected",
             "reason": decision.reason,
@@ -169,8 +283,6 @@ async def receive_chatwoot_webhook(
         }
 
     # Extract transient attachment URLs from the raw payload for media processing.
-    # These URLs are NOT stored in NormalizedChatwootEvent (security boundary) but
-    # are safe to carry in the ephemeral RabbitMQ job message.
     message_raw = payload.get("message", {}) or payload
     raw_attachments = message_raw.get("attachments") or payload.get("attachments") or []
     attachment_jobs: list[dict] = []
@@ -180,10 +292,8 @@ async def receive_chatwoot_webhook(
         url = att.get("data_url") or att.get("url") or att.get("thumb_url")
         if not url:
             continue
-        import hashlib as _hl
-
         file_key = att.get("file_key") or att.get("id", f"att_{i}")
-        ref = _hl.sha256(str(file_key).encode()).hexdigest()[:24]
+        ref = hashlib.sha256(str(file_key).encode()).hexdigest()[:24]
         attachment_jobs.append(
             {
                 "ref": ref,
@@ -193,13 +303,10 @@ async def receive_chatwoot_webhook(
             }
         )
 
-    # Extract sender identity for admin command authorization.
-    # sender_type: "contact", "agent", or "agent_bot" (Chatwoot sender types)
     sender_raw = message_raw.get("sender") or payload.get("sender") or {}
     sender_type = str(sender_raw.get("type", "contact"))
     sender_ref = str(sender_raw.get("id", ""))
 
-    # Queue processing job (background task for fast 200 response)
     rabbitmq_conn = getattr(request.app.state, "rabbitmq", None)
     background_tasks.add_task(
         _queue_processing_job,
@@ -250,6 +357,10 @@ async def _queue_processing_job(
         correlation_id: Tracing ID.
         idempotency_key: Deduplication key.
         raw_hash: Hash reference of the raw event.
+        content: Message text (optional).
+        attachments: Attachment job descriptors (optional).
+        sender_type: Sender type string.
+        sender_ref: Sender identifier.
         rabbitmq_connection: Live aio_pika connection from app.state, or None.
     """
     log = logger.bind(

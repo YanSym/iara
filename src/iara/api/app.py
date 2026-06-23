@@ -43,6 +43,30 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None]:
         version="0.1.0",
     )
 
+    # Connect to Postgres (optional — graceful degradation in dev without DB)
+    try:
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+        _engine = create_async_engine(
+            settings.database_url,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_pre_ping=True,
+            echo=settings.database_echo,
+        )
+        application.state.db_session_factory = async_sessionmaker(
+            _engine, class_=AsyncSession, expire_on_commit=False
+        )
+        application.state.db_engine = _engine
+        logger.info("database_connected")
+    except Exception as exc:
+        application.state.db_session_factory = None
+        application.state.db_engine = None
+        logger.warning(
+            "database_unavailable_degraded_mode",
+            error_summary=str(exc)[:200],
+        )
+
     # Connect to RabbitMQ (optional — graceful degradation if not running)
     try:
         import aio_pika
@@ -65,6 +89,10 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None]:
     if rabbitmq := getattr(application.state, "rabbitmq", None):
         await rabbitmq.close()
         logger.info("rabbitmq_disconnected")
+
+    if engine := getattr(application.state, "db_engine", None):
+        await engine.dispose()
+        logger.info("database_disconnected")
 
     logger.info("iara_stopping")
 

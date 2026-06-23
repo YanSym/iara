@@ -56,6 +56,9 @@ migrate-history: ## Show migration history
 migrate-current: ## Show current migration
 	$(UV) run alembic current
 
+seed-pilot: ## Seed pilot tenant, provider account, and inbox (idempotent)
+	$(UV) run python -m iara.persistence.seeds.seed_pilot
+
 # ── Application ───────────────────────────────────────────────────────────────
 run: ## Start the FastAPI webhook server (reload mode)
 	$(UV) run uvicorn iara.api.app:app --reload --host 0.0.0.0 --port 8000

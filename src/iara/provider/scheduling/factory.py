@@ -37,6 +37,86 @@ def _resolve_credential(credential_ref: str) -> str:
     return os.environ.get(env_key, credential_ref)
 
 
+def build_google_calendar_write_adapter(settings: Settings) -> Any:
+    """Build a Google Calendar write adapter, or Null if not configured.
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        GoogleCalendarWriteAdapter or NullSchedulingWriteAdapter.
+    """
+    from iara.provider.scheduling.write_adapter import NullSchedulingWriteAdapter
+
+    if settings.google_calendar_enabled:
+        cred = _resolve_credential(settings.google_calendar_credential_ref)
+        if not cred.startswith("secret://"):
+            from iara.provider.scheduling.google_calendar_write import GoogleCalendarWriteAdapter
+
+            logger.info("scheduling_write_adapter_google_calendar")
+            return GoogleCalendarWriteAdapter(
+                credentials_ref=settings.google_calendar_credential_ref
+            )
+
+    logger.info("scheduling_write_adapter_google_calendar_null_fallback")
+    return NullSchedulingWriteAdapter()
+
+
+def build_clinicorp_write_adapter(settings: Settings) -> Any:
+    """Build a Clinicorp write adapter, or Null if not configured.
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        ClinicorpWriteAdapter or NullSchedulingWriteAdapter.
+    """
+    from iara.provider.scheduling.write_adapter import NullSchedulingWriteAdapter
+
+    if settings.clinicorp_enabled:
+        cred = _resolve_credential(settings.clinicorp_credential_ref)
+        if not cred.startswith("secret://"):
+            from iara.provider.scheduling.clinicorp_write import ClinicorpWriteAdapter
+
+            logger.info("scheduling_write_adapter_clinicorp")
+            return ClinicorpWriteAdapter(
+                api_key_ref=settings.clinicorp_credential_ref,
+                base_url=settings.clinicorp_base_url,
+            )
+
+    logger.info("scheduling_write_adapter_clinicorp_null_fallback")
+    return NullSchedulingWriteAdapter()
+
+
+def build_scheduling_write_adapter(settings: Settings) -> Any:
+    """Build the highest-priority scheduling write adapter available.
+
+    Priority: Clinicorp > Google Calendar > Null.
+    Use the provider-specific builders when building an ``adapters`` dict
+    for multi-provider outbox routing.
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        SchedulingWriteAdapter: The configured write adapter.
+    """
+    if settings.clinicorp_enabled:
+        cred = _resolve_credential(settings.clinicorp_credential_ref)
+        if not cred.startswith("secret://"):
+            return build_clinicorp_write_adapter(settings)
+
+    if settings.google_calendar_enabled:
+        cred = _resolve_credential(settings.google_calendar_credential_ref)
+        if not cred.startswith("secret://"):
+            return build_google_calendar_write_adapter(settings)
+
+    from iara.provider.scheduling.write_adapter import NullSchedulingWriteAdapter
+
+    logger.info("scheduling_write_adapter_null_fallback")
+    return NullSchedulingWriteAdapter()
+
+
 def build_scheduling_adapter(settings: Settings) -> SchedulingAdapter:
     """Build the best available scheduling adapter from application settings.
 

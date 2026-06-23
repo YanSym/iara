@@ -2,6 +2,10 @@
 
 Side-effecting tools emit ProviderCommands to the outbox. They never
 execute provider calls directly inside this executor (INV-04).
+
+Read-only tools delegate to the corresponding catalog module handlers.
+Follow-up scheduling routes to follow_up_queue (not the outbox) so the
+follow-up scheduler worker sends the message at trigger_at.
 """
 
 from __future__ import annotations
@@ -20,6 +24,9 @@ from iara.tools.policy_guard import OperationMode, PolicyCheckResult
 
 logger = get_logger(__name__)
 
+# Capabilities that route to the follow-up queue instead of the outbox
+_FOLLOW_UP_CAPABILITIES: frozenset[str] = frozenset({"followup_schedule"})
+
 
 class ToolExecutor:
     """Executes Agent Tools in the correct mode with outbox side-effects.
@@ -27,15 +34,21 @@ class ToolExecutor:
     Args:
         outbox_service: Service to enqueue provider commands.
         tenant_id: Tenant UUID string.
+        scheduling_adapter: Read-only scheduling provider (optional).
+        follow_up_repo: Follow-up queue repository (optional).
     """
 
     def __init__(
         self,
         tenant_id: str,
         outbox_service: Any | None = None,
+        scheduling_adapter: Any | None = None,
+        follow_up_repo: Any | None = None,
     ) -> None:
         self._tenant_id = tenant_id
         self._outbox = outbox_service
+        self._scheduling_adapter = scheduling_adapter
+        self._follow_up_repo = follow_up_repo
 
     async def execute(
         self,
@@ -55,6 +68,10 @@ class ToolExecutor:
         Returns:
             ToolInvocationResult: Sanitized invocation result.
         """
+        # Follow-up scheduling routes to follow_up_queue
+        if request.tool_name in _FOLLOW_UP_CAPABILITIES:
+            return await self._execute_follow_up(request)
+
         # Read-only tools
         if not tool.is_side_effecting:
             return await self._execute_read(request, tool)
@@ -75,7 +92,7 @@ class ToolExecutor:
         request: ToolInvocationRequest,
         tool: AgentToolDefinition,
     ) -> ToolInvocationResult:
-        """Execute a read-only tool.
+        """Execute a read-only tool by delegating to its catalog handler.
 
         Args:
             request: The invocation request.
@@ -84,7 +101,6 @@ class ToolExecutor:
         Returns:
             ToolInvocationResult: Read result.
         """
-        # Route to specific tool handlers
         result_data = await self._dispatch_read_tool(request.tool_name, request.arguments)
         return ToolInvocationResult(
             invocation_id=request.invocation_id,
@@ -116,7 +132,7 @@ class ToolExecutor:
             "draft_ref": draft_ref,
             "mode": policy_result.mode,
             "tool_name": request.tool_name,
-            "arguments_received": list(request.arguments.keys()),  # Keys only, not values
+            "arguments_received": list(request.arguments.keys()),
         }
         return ToolInvocationResult(
             invocation_id=request.invocation_id,
@@ -151,8 +167,6 @@ class ToolExecutor:
         outbox_ref = None
 
         if self._outbox is not None:
-            # Emit to outbox — actual execution happens asynchronously
-            # by the outbox drainer worker
             await self._outbox.enqueue_tool_command(
                 command_id=command_id,
                 tool_name=request.tool_name,
@@ -173,10 +187,70 @@ class ToolExecutor:
             call_id=request.call_id,
         )
 
+    async def _execute_follow_up(self, request: ToolInvocationRequest) -> ToolInvocationResult:
+        """Build a follow-up payload and enqueue it to follow_up_queue.
+
+        The follow-up scheduler worker handles actual message delivery at
+        trigger_at. This path never writes to the outbox (INV-04 compliant —
+        the queue write is deterministic and idempotent).
+
+        Args:
+            request: The invocation request.
+
+        Returns:
+            ToolInvocationResult: Scheduled or skipped result.
+        """
+        from iara.tools.catalog.followup import build_followup_schedule_payload
+
+        payload = build_followup_schedule_payload(
+            arguments=request.arguments,
+            tenant_id=self._tenant_id,
+            conversation_id=request.arguments.get("conversation_id", ""),
+            idempotency_key=request.idempotency_key,
+            correlation_id=request.correlation_id,
+        )
+
+        if payload.get("status") == "skipped":
+            return ToolInvocationResult(
+                invocation_id=request.invocation_id,
+                tool_name=request.tool_name,
+                status=ToolResultStatus.SUCCESS,
+                result_summary="Follow-up skipped (opted-out or quiet hours).",
+                result_data=payload,
+                call_id=request.call_id,
+            )
+
+        if self._follow_up_repo is not None:
+            try:
+                await self._follow_up_repo.enqueue_raw(payload)
+            except Exception as exc:
+                logger.warning(
+                    "follow_up_enqueue_failed",
+                    error_code=type(exc).__name__,
+                    idempotency_key=request.idempotency_key,
+                )
+
+        return ToolInvocationResult(
+            invocation_id=request.invocation_id,
+            tool_name=request.tool_name,
+            status=ToolResultStatus.SUCCESS,
+            result_summary=f"Follow-up scheduled for {payload.get('trigger_at', 'unknown time')}.",
+            result_data={
+                "trigger_at": payload.get("trigger_at", ""),
+                "message_ref": payload.get("message_ref", ""),
+                "status": "scheduled",
+            },
+            call_id=request.call_id,
+        )
+
     async def _dispatch_read_tool(
         self, tool_name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """Dispatch a read-only tool call to the appropriate handler.
+        """Route read-only tool calls to the catalog module handler.
+
+        Each catalog handler returns sanitized data — no PII, no raw provider
+        responses. When a handler is not registered, returns a structured error
+        so the agent can handle it gracefully instead of crashing.
 
         Args:
             tool_name: The logical tool name.
@@ -185,67 +259,54 @@ class ToolExecutor:
         Returns:
             dict[str, Any]: Sanitized read result.
         """
-        # Read-only tool handlers (stubs for now — real implementations in catalog/)
-        handlers: dict[str, Any] = {
-            "availability": self._handle_availability,
-            "lead_search": self._handle_lead_search,
-            "kanban_analyze_conversation": self._handle_kanban_analyze,
-            "history_analyze_conversations": self._handle_history_analyze,
-            "campaign_status": self._handle_campaign_status,
-            "campaign_validate_audience": self._handle_campaign_validate,
-        }
-        handler = handlers.get(tool_name)
-        if handler is None:
-            return {"status": "not_implemented", "tool_name": tool_name}
-        result: dict[str, Any] = await handler(arguments)
-        return result
+        match tool_name:
+            case "availability":
+                from iara.tools.catalog import scheduling
 
-    async def _handle_availability(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Return stub availability data."""
-        return {
-            "available_slots": 3,
-            "next_available": "2026-06-10T09:00:00",
-            "note": "Availability check — stub implementation",
-        }
+                if self._scheduling_adapter is not None:
+                    scheduling._SCHEDULING_ADAPTER = self._scheduling_adapter
+                return await scheduling.handle_availability(arguments)
 
-    async def _handle_lead_search(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Return stub lead search results."""
-        return {
-            "results_count": 0,
-            "note": "Lead search — stub implementation",
-        }
+            case "kanban_analyze_conversation":
+                from iara.tools.catalog import kanban
 
-    async def _handle_kanban_analyze(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Return stub kanban analysis."""
-        return {
-            "suggested_stage": "nurturing",
-            "confidence": 0.75,
-            "mode": "suggest_only",
-        }
+                return await kanban.handle_kanban_analyze(arguments)
 
-    async def _handle_history_analyze(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Return stub history analysis."""
-        return {
-            "analyzed_count": 0,
-            "draft_ref": f"draft:{str(uuid.uuid4())[:8]}",
-            "note": "History analysis — stub implementation",
-        }
+            case "lead_search":
+                from iara.tools.catalog import lead
 
-    async def _handle_campaign_status(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Return stub campaign status."""
-        return {
-            "status": "draft",
-            "sent_count": 0,
-            "failed_count": 0,
-        }
+                return await lead.handle_lead_search(arguments)
 
-    async def _handle_campaign_validate(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Return stub campaign validation."""
-        return {
-            "eligible_count": 0,
-            "opted_out_count": 0,
-            "note": "Audience validation — stub implementation",
-        }
+            case "history_analyze_conversations":
+                from iara.tools.catalog import history
+
+                return await history.handle_history_analyze(arguments)
+
+            case "campaign_status":
+                from iara.tools.catalog import campaigns
+
+                return await campaigns.handle_campaign_status(arguments)
+
+            case "campaign_validate_audience":
+                from iara.tools.catalog import campaigns
+
+                return await campaigns.handle_campaign_validate_audience(arguments)
+
+            case "kb_suggest":
+                from iara.tools.catalog import kb
+
+                return await kb.handle_kb_suggest(arguments)
+
+            case _:
+                logger.warning(
+                    "read_tool_not_registered",
+                    tool_name=tool_name,
+                )
+                return {
+                    "status": "not_implemented",
+                    "tool_name": tool_name,
+                    "message": "This read capability has no registered handler.",
+                }
 
     def _summarize(self, tool_name: str, result_data: dict[str, Any]) -> str:
         """Create a brief summary for the agent's context.

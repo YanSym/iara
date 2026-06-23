@@ -27,9 +27,14 @@ Copy `.env.example` to `.env` and fill in values.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHATWOOT_MCP_BASE_URL` | — | Chatwoot instance base URL |
-| `CHATWOOT_MCP_API_TOKEN_REF` | `secret://chatwoot/api_token` | Secret ref for Chatwoot API token |
-| `CHATWOOT_MCP_ACCOUNT_ID` | — | Default Chatwoot account ID |
+| `CHATWOOT_MCP_BASE_URL` | — | Chatwoot instance base URL (no trailing slash) |
+| `CHATWOOT_MCP_CREDENTIAL_REF` | `secret://chatwoot/mcp_token` | Secret ref for Chatwoot `Api-Access-Token` |
+| `CHATWOOT_MCP_API_TOKEN_REF` | `secret://chatwoot/api_token` | Alternate secret ref (legacy alias) |
+| `CHATWOOT_ACCOUNT_ID` | — | Default Chatwoot account ID (numeric string, e.g. `59`) |
+| `CHATWOOT_MCP_SLUG` | — | MCP server slug (per-tenant, e.g. `mcp-suporte`) |
+
+The MCP endpoint is constructed as `{CHATWOOT_MCP_BASE_URL}/mcp/{CHATWOOT_ACCOUNT_ID}/{CHATWOOT_MCP_SLUG}`.
+The `Api-Access-Token` header is used — not `Bearer`.
 
 ## Scheduling / Integrations
 
@@ -49,12 +54,26 @@ Copy `.env.example` to `.env` and fill in values.
 | `IARA_MAX_CONTENT_LENGTH` | `4096` | Max message content length in chars |
 | `RABBITMQ_PREFETCH_COUNT` | `10` | Consumer prefetch count |
 
+## Pilot / Seeding
+
+These variables are used by `make seed-pilot` / `src/iara/persistence/seeds/seed_pilot.py`
+to bootstrap the first tenant in a new environment. Not required at runtime after seeding.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IARA_PILOT_TENANT_ID` | — | UUID to assign to the pilot tenant |
+| `IARA_PILOT_WEBHOOK_KEY` | — | Raw webhook key (stored as SHA-256 hash in DB) |
+| `IARA_PILOT_TENANT_NAME` | `IAra Pilot` | Display name for the pilot tenant |
+
+The pilot seed also reads `CHATWOOT_ACCOUNT_ID` and `CHATWOOT_MCP_SLUG` to create the
+provider account binding.
+
 ## Policy / Mode
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `IARA_KANBAN_MODE` | `suggest_only` | Kanban write mode (`suggest_only`, `write`) |
-| `IARA_CAMPAIGN_MODE` | `draft_only` | Campaign write mode (`draft_only`, `approved_send`) |
+| `IARA_KANBAN_DEFAULT_MODE` | `suggest_only` | Kanban write mode (`suggest_only`, `write_sandbox`, `write_confirmed`) |
+| `IARA_CAMPAIGN_DEFAULT_MODE` | `draft_only` | Campaign write mode (`draft_only`, `dry_run`, `sandbox`, `approved_send`) |
 
 ## Memory / Context
 

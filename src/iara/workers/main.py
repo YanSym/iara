@@ -11,6 +11,7 @@ import signal
 
 from iara.config.settings import get_settings
 from iara.observability.logging import configure_logging, get_logger
+from iara.workers.follow_up_scheduler import FollowUpSchedulerWorker
 from iara.workers.job_consumer import JobConsumerWorker
 from iara.workers.outbox_drainer import OutboxDrainerWorker
 
@@ -22,7 +23,8 @@ async def main() -> None:
 
     Starts:
     1. RabbitMQ job consumer (conversation processing jobs — uses Postgres checkpointer)
-    2. Outbox drainer (pending provider commands — wired to ChatwootMcpAdapter)
+    2. Outbox drainer (pending provider commands — multi-provider routing)
+    3. Follow-up scheduler (promotes due follow_up_queue items to the outbox)
     """
     settings = get_settings()
     configure_logging(level=settings.log_level, log_format=settings.log_format)
@@ -43,20 +45,34 @@ async def main() -> None:
     loop.add_signal_handler(signal.SIGTERM, handle_shutdown)
     loop.add_signal_handler(signal.SIGINT, handle_shutdown)
 
-    # Wire the ChatwootMcpAdapter so outbox commands actually reach Chatwoot.
+    # Build provider adapters for outbox routing: chatwoot / google_calendar / clinicorp.
     from iara.provider.chatwoot.mcp_adapter import ChatwootMcpAdapter
     from iara.provider.chatwoot.mcp_registry import ChatwootMcpRegistry
 
     chatwoot_adapter = ChatwootMcpAdapter(
         registry=ChatwootMcpRegistry(),
         mcp_base_url=settings.chatwoot_mcp_base_url,
+        account_id=settings.chatwoot_account_id,
+        mcp_slug=settings.chatwoot_mcp_slug,
         credential_ref=settings.chatwoot_mcp_credential_ref,
         timeout_seconds=settings.chatwoot_mcp_timeout_seconds,
         max_retries=settings.chatwoot_mcp_max_retries,
     )
 
+    from iara.provider.scheduling.factory import (
+        build_clinicorp_write_adapter,
+        build_google_calendar_write_adapter,
+    )
+
+    adapters = {
+        "chatwoot": chatwoot_adapter,
+        "google_calendar": build_google_calendar_write_adapter(settings),
+        "clinicorp": build_clinicorp_write_adapter(settings),
+    }
+
     job_consumer = JobConsumerWorker(settings=settings)
-    outbox_drainer = OutboxDrainerWorker(settings=settings, adapter=chatwoot_adapter)
+    outbox_drainer = OutboxDrainerWorker(settings=settings, adapters=adapters)
+    follow_up_scheduler = FollowUpSchedulerWorker(settings=settings)
 
     tasks = [
         asyncio.create_task(
@@ -66,6 +82,10 @@ async def main() -> None:
         asyncio.create_task(
             outbox_drainer.start(shutdown_event),
             name="outbox_drainer",
+        ),
+        asyncio.create_task(
+            follow_up_scheduler.start(shutdown_event),
+            name="follow_up_scheduler",
         ),
     ]
 

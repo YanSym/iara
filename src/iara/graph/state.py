@@ -40,7 +40,11 @@ class GraphState(TypedDict, total=False):
     error: str | None
     hitl_requested: bool
     hitl_approved: bool  # set by /hitl/{run_id}/approve before graph resumes
+    hitl_reason: str  # anti_loop | low_confidence | explicit
     step_count: int
+
+    # Guardrails context — kept to detect loops across turns
+    response_history: list[str]
 
     # Message history — accumulates across nodes with list concatenation
     messages: Annotated[list[dict[str, Any]], operator.add]

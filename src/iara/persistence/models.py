@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -314,6 +315,9 @@ class AgentConfigVersion(Base):
     version_tag: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     config_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    config_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="Full configuration data for this version"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("tenant_id", "version_tag", name="uq_config_version_tag"),)
@@ -335,3 +339,86 @@ class ConfigPublication(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ── HITL holds ────────────────────────────────────────────────────────────────
+
+
+class HitlHoldRecord(Base):
+    """Postgres-backed record of a paused agent run awaiting human approval."""
+
+    __tablename__ = "hitl_holds"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", comment="pending | approved | rejected"
+    )
+    resolved_by: Mapped[str | None] = mapped_column(String(256))
+    context_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="Non-sensitive graph state snapshot"
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_hitl_holds_tenant_status", "tenant_id", "status"),
+        Index("ix_hitl_holds_run_id_idx", "run_id"),
+    )
+
+
+# ── Follow-up queue ───────────────────────────────────────────────────────────
+
+
+class FollowUpQueueItem(Base):
+    """Durable queue of scheduled follow-up messages.
+
+    The follow-up scheduler worker polls this table and enqueues due items
+    to the provider_command_outbox at trigger_at. All content is stored as
+    opaque hashes — no raw message text or PII (INV-05).
+    """
+
+    __tablename__ = "follow_up_queue"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    contact_ref: Mapped[str] = mapped_column(
+        String(256), nullable=False, comment="Hashed contact ref"
+    )
+    message_ref: Mapped[str] = mapped_column(
+        String(256), nullable=False, comment="SHA-256 of message"
+    )
+    message_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason_ref: Mapped[str] = mapped_column(
+        String(256), nullable=False, comment="SHA-256 of reason"
+    )
+    trigger_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", comment="pending | sent | skipped | failed"
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    opted_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    skip_reason: Mapped[str | None] = mapped_column(String(256))
+
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_follow_up_idempotency"),
+        Index(
+            "ix_follow_up_trigger",
+            "trigger_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_follow_up_tenant_status", "tenant_id", "status"),
+    )

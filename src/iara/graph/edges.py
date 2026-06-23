@@ -99,10 +99,12 @@ def should_continue_after_guardrails(state: dict[str, Any]) -> str:
         state: Current graph state.
 
     Returns:
-        str: Next node name.
+        str: Next node name — hitl if an escalation was triggered, else command_dispatch.
     """
     if state.get("error"):
         return "end"
+    if state.get("hitl_requested"):
+        return "hitl"
     return "command_dispatch"
 
 

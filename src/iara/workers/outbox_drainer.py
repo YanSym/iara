@@ -11,13 +11,20 @@ graph nodes only enqueue — they never execute directly.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from iara.config.settings import Settings
-from iara.contracts.provider import ProviderCommand, ProviderSecurityContext, RiskClass
+from iara.contracts.provider import (
+    ProviderCommand,
+    ProviderMutationResult,
+    ProviderSecurityContext,
+    RiskClass,
+)
 from iara.observability.logging import get_logger
 from iara.observability.metrics import outbox_commands_total
 from iara.persistence.repositories.outbox import OutboxRepository
@@ -31,18 +38,36 @@ DEFAULT_BATCH_SIZE = 50
 class OutboxDrainerWorker:
     """Polls the outbox and executes pending provider commands.
 
+    Routes each command to the correct adapter by ``command.provider``.
+    The ``adapters`` dict maps provider names to adapter instances, e.g.::
+
+        {
+            "chatwoot": ChatwootMcpAdapter(...),
+            "google_calendar": GoogleCalendarWriteAdapter(...),
+            "clinicorp": ClinicorpWriteAdapter(...),
+        }
+
     Args:
         settings: Application settings.
-        adapter: Provider adapter to execute commands (optional).
+        adapters: Provider-keyed adapter dict (replaces the old single-adapter param).
+        adapter: Deprecated single-adapter param kept for backwards compat.
     """
 
     def __init__(
         self,
         settings: Settings,
+        adapters: dict[str, Any] | None = None,
         adapter: Any | None = None,
     ) -> None:
         self._settings = settings
-        self._adapter = adapter
+        # Prefer the new multi-provider ``adapters`` dict; fall back to
+        # wrapping the legacy single ``adapter`` under key "chatwoot".
+        if adapters is not None:
+            self._adapters = adapters
+        elif adapter is not None:
+            self._adapters = {"chatwoot": adapter}
+        else:
+            self._adapters: dict[str, Any] = {}
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
 
     async def start(self, shutdown_event: asyncio.Event) -> None:
@@ -80,8 +105,8 @@ class OutboxDrainerWorker:
         if self._session_factory is None:
             return
 
-        if self._adapter is None:
-            logger.warning("outbox_adapter_not_configured_skipping_batch")
+        if not self._adapters:
+            logger.warning("outbox_adapters_not_configured_skipping_batch")
             return
 
         session_factory = self._session_factory  # narrow type for mypy
@@ -169,8 +194,18 @@ class OutboxDrainerWorker:
                 risk_class=risk,
             )
 
-            log.info("outbox_executing_command")
-            result = await self._adapter.execute_command(provider_command, security_context)  # type: ignore[union-attr]
+            provider_name = str(command.provider) if command.provider else "chatwoot"
+            adapter = self._adapters.get(provider_name)
+            if adapter is None:
+                log.warning(
+                    "outbox_no_adapter_for_provider",
+                    provider=provider_name,
+                    known_providers=list(self._adapters.keys()),
+                )
+                return
+
+            log.info("outbox_executing_command", provider=provider_name)
+            result = await adapter.execute_command(provider_command, security_context)
             log.info(
                 "outbox_command_sent", success=result.success, readback=result.readback_confirmed
             )
@@ -180,6 +215,10 @@ class OutboxDrainerWorker:
                 await repo.mark_sent(command_id=command_id)
                 await session.commit()
             outbox_commands_total.labels(status="sent").inc()
+
+            # Post-schedule hook: create T-1h confirmation follow-up
+            if capability_name == "schedule_appointment":
+                await self._post_schedule_hook(provider_command, result, session_factory)
 
         except Exception as exc:
             next_retry = retry_count + 1
@@ -212,3 +251,87 @@ class OutboxDrainerWorker:
                     )
                     outbox_commands_total.labels(status="failed").inc()
                 await session.commit()
+
+    async def _post_schedule_hook(
+        self,
+        command: ProviderCommand,
+        result: ProviderMutationResult,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Create a T-1h confirmation follow-up after a successful appointment schedule.
+
+        Inserts a row in follow_up_queue with trigger_at = appointment_datetime - 1h.
+        Idempotent: uses command_id as the idempotency seed.
+
+        Args:
+            command: The completed schedule_appointment command.
+            result: The mutation result (unused, but kept for future readback).
+            session_factory: Active session factory.
+        """
+        try:
+            from iara.persistence.repositories.follow_up import FollowUpRepository
+
+            params = command.parameters or {}
+            appointment_dt_str = params.get("datetime_iso", "") or params.get("start", {}).get(
+                "dateTime", ""
+            )
+            if not appointment_dt_str:
+                logger.warning(
+                    "post_schedule_hook_no_dt",
+                    command_id=str(command.command_id),
+                )
+                return
+
+            try:
+                appointment_dt = datetime.fromisoformat(appointment_dt_str)
+                if appointment_dt.tzinfo is None:
+                    appointment_dt = appointment_dt.replace(tzinfo=UTC)
+            except ValueError:
+                logger.warning(
+                    "post_schedule_hook_invalid_dt",
+                    command_id=str(command.command_id),
+                    datetime_str=appointment_dt_str[:50],
+                )
+                return
+
+            offset_hours = -1  # T-1h default; configurable per-tenant in future
+            trigger_at = appointment_dt + timedelta(hours=offset_hours)
+            idempotency_key = (
+                "confirmation:" + hashlib.sha256(str(command.command_id).encode()).hexdigest()[:16]
+            )
+
+            payload: dict[str, Any] = {
+                "tenant_id": str(command.tenant_id),
+                "conversation_id": str(params.get("conversation_id", "")),
+                "contact_ref": str(params.get("contact_ref", "")),
+                "message_ref": "msg:"
+                + hashlib.sha256(f"appointment_reminder:{command.command_id}".encode()).hexdigest()[
+                    :16
+                ],
+                "message_length": 80,
+                "reason_ref": hashlib.sha256(b"appointment_confirmation").hexdigest()[:16],
+                "trigger_at": trigger_at.isoformat(),
+                "idempotency_key": idempotency_key,
+                "correlation_id": str(command.correlation_id),
+                "max_attempts": 1,
+                "opted_out": False,
+            }
+
+            async with session_factory() as session:
+                follow_up_repo = FollowUpRepository(session)
+                await follow_up_repo.enqueue_raw(payload)
+                await session.commit()
+
+            logger.info(
+                "post_schedule_confirmation_queued",
+                command_id=str(command.command_id),
+                trigger_at=trigger_at.isoformat(),
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "post_schedule_hook_failed",
+                command_id=str(command.command_id),
+                error_code=type(exc).__name__,
+                error_summary=str(exc)[:200],
+            )

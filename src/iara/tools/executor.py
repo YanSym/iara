@@ -24,8 +24,10 @@ from iara.tools.policy_guard import OperationMode, PolicyCheckResult
 
 logger = get_logger(__name__)
 
-# Capabilities that route to the follow-up queue instead of the outbox
-_FOLLOW_UP_CAPABILITIES: frozenset[str] = frozenset({"followup_schedule"})
+# Capabilities that route to the follow-up queue instead of the outbox.
+# These tools schedule deferred messages; the FollowUpSchedulerWorker sends them
+# at trigger_at via the outbox. Direct outbox dispatch is intentionally bypassed.
+_FOLLOW_UP_CAPABILITIES: frozenset[str] = frozenset({"followup_reengage_conversation"})
 
 
 class ToolExecutor:

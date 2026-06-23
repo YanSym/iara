@@ -214,13 +214,6 @@ def build_production_graph(settings: Settings, checkpointer: Any = None) -> Any:
         campaign_mode=campaign_mode,
     )
 
-    executor = ToolExecutor(tenant_id="__production__")
-    gateway = AgentToolMcpGateway(
-        registry=registry,
-        policy_guard=policy_guard,
-        executor=executor,
-    )
-
     # ── Database / Outbox ─────────────────────────────────────────────────────
     engine = create_async_engine(
         settings.database_url,
@@ -230,7 +223,20 @@ def build_production_graph(settings: Settings, checkpointer: Any = None) -> Any:
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     outbox_service = OutboxService(session_factory=session_factory)
-    executor._outbox = outbox_service  # type: ignore[attr-defined]
+
+    # FollowUpRepository factory — creates a session-scoped repo per call.
+    follow_up_repo = _FollowUpRepoFactory(session_factory)
+
+    executor = ToolExecutor(
+        tenant_id="__production__",
+        outbox_service=outbox_service,
+        follow_up_repo=follow_up_repo,
+    )
+    gateway = AgentToolMcpGateway(
+        registry=registry,
+        policy_guard=policy_guard,
+        executor=executor,
+    )
 
     # ── Media ─────────────────────────────────────────────────────────────────
     media_subgraph = MediaUnderstandingSubgraph(
@@ -286,6 +292,27 @@ def build_production_graph(settings: Settings, checkpointer: Any = None) -> Any:
         checkpointer=checkpointer,
         session_factory=session_factory,
     )
+
+
+class _FollowUpRepoFactory:
+    """Thin factory: exposes enqueue_raw() by creating a per-call DB session.
+
+    Passed to ToolExecutor as follow_up_repo so follow-up scheduling persists
+    to the follow_up_queue table without requiring a long-lived session.
+    """
+
+    def __init__(self, session_factory: Any) -> None:
+        self._session_factory = session_factory
+
+    async def enqueue_raw(self, payload: dict) -> str:
+        """Enqueue a follow-up payload; commits inside a fresh session."""
+        from iara.persistence.repositories.follow_up import FollowUpRepository
+
+        async with self._session_factory() as session:
+            repo = FollowUpRepository(session)
+            result = await repo.enqueue_raw(payload)
+            await session.commit()
+            return result
 
 
 def _inject_scheduling_adapter(adapter: Any) -> None:

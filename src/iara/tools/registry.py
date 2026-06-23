@@ -281,12 +281,28 @@ _DEFAULT_TOOLS: list[AgentToolDefinition] = [
     AgentToolDefinition(
         tool_name="followup_reengage_conversation",
         display_name="Follow Up on Conversation",
-        description="Send a follow-up message to re-engage a conversation.",
+        description=(
+            "Schedule a deferred follow-up message to re-engage a conversation. "
+            "The message is sent at trigger_at (or delay_hours from now). "
+            "Opt-out and quiet hours are enforced automatically."
+        ),
         parameters_schema={
             "type": "object",
             "properties": {
-                "message": {"type": "string"},
-                "reason": {"type": "string"},
+                "message": {"type": "string", "description": "Message to send."},
+                "reason": {"type": "string", "description": "Reason for the follow-up."},
+                "delay_hours": {
+                    "type": "number",
+                    "description": "Hours from now to send (default 1.0). Quiet hours apply.",
+                },
+                "trigger_at_iso": {
+                    "type": "string",
+                    "description": "ISO-8601 UTC datetime to send (alternative to delay_hours).",
+                },
+                "opted_out": {
+                    "type": "boolean",
+                    "description": "Pass true to skip if the contact has opted out.",
+                },
             },
             "required": ["message"],
         },

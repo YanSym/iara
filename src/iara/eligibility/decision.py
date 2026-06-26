@@ -27,11 +27,12 @@ class EligibilityChecker:
     Eligibility rules (in order of evaluation):
     1. Account ID must match the tenant's provider_account_id binding.
     2. Event must be a message event (not just a status change for now).
-    3. Message direction must be INCOMING (not OUTGOING, ACTIVITY, TEMPLATE).
-    4. Sender must not be a bot or system.
-    5. Message must not be a private note.
-    6. Event must not be a duplicate (checked against idempotency ledger).
-    7. Conversation must not be in the debounce window.
+    3. Message direction must be INCOMING (not OUTGOING).
+    4. Message type must not be ACTIVITY or TEMPLATE.
+    5. Sender must not be a bot or system.
+    6. Message must not be a private note.
+    7. Event must not be a duplicate (checked against idempotency ledger).
+    8. Conversation must not be in the debounce window.
 
     Args:
         idempotency_checker: Async callable that checks if a key has been seen.

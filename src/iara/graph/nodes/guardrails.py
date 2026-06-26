@@ -38,7 +38,20 @@ LOOP_THRESHOLD = 0.85
 LOOP_WINDOW = 3
 
 # Phrases that signal the model is operating outside its confidence boundary.
+# Covers both PT-BR (primary language) and EN fallback.
 _LOW_CONFIDENCE_PATTERNS: list[re.Pattern[str]] = [
+    # PT-BR patterns
+    re.compile(r"\bn[aã]o (sei|tenho certeza|estou seguro|consigo confirmar)\b", re.IGNORECASE),
+    re.compile(r"\bn[aã]o tenho (informa[cç][oõ]es|dados|contexto) suficientes?\b", re.IGNORECASE),
+    re.compile(r"\bpode(ria)? (ser|estar) errado\b", re.IGNORECASE),
+    re.compile(r"\b(talvez|provavelmente|possivelmente) (sim|n[aã]o|seja|esteja)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(recomendo|sugiro) (consultar|verificar com|falar com)"
+        r" (um? )?(m[eé]dico|advogado|especialista|profissional|humano|atendente)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bn[aã]o (posso|consigo) (garantir|confirmar|afirmar)\b", re.IGNORECASE),
+    # EN fallback patterns
     re.compile(r"\bi (don'?t|do not) know\b", re.IGNORECASE),
     re.compile(r"\bi'?m not sure\b", re.IGNORECASE),
     re.compile(r"\bi cannot (be certain|confirm|guarantee)\b", re.IGNORECASE),
@@ -56,8 +69,8 @@ _LOW_CONFIDENCE_PATTERNS: list[re.Pattern[str]] = [
 
 # Neutral escalation response shown to the end-user when a hold is triggered.
 _HITL_ESCALATION_RESPONSE = (
-    "I want to make sure I handle this correctly. "
-    "Let me connect you with a team member who can help further."
+    "Quero ter certeza de que vou resolver isso da melhor forma. "
+    "Vou conectar você com um membro da equipe que pode ajudar."
 )
 
 

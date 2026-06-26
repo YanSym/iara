@@ -43,6 +43,13 @@ infra/terraform/terraform.tfstate.backup
 infra/terraform/*.tfstate.*
 infra/terraform/*.tfplan
 
+# Sensitive access files — never commit credentials
+acessos/
+accesses/
+**/ACCESS.md
+**/access.md
+**/CREDENTIALS.md
+
 # IDE
 .idea/
 .vscode/
